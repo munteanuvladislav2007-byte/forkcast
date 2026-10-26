@@ -52,7 +52,7 @@
 </main>
 
 <nav class="actionbar" aria-label="Add food">
-  <button class="act" data-open="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Search</span></button>
+  <button class="act" data-open="search"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span>Add food</span></button>
   <button class="act" data-open="scan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h3M18 4h3v3M21 17v3h-3M6 20H3v-3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 8v8M10 8v8M12.5 8v8M15 8v8M17 8v8" stroke="currentColor" stroke-width="1.6"/></svg><span>Scan</span></button>
   <button class="act act-main" data-open="claude"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="4" width="10" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 4h4v2.5h-4z" fill="currentColor"/><path d="M10 12h4M10 15.5h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>From Claude</span></button>
 </nav>
@@ -60,7 +60,7 @@
 <!-- Add food sheet -->
 <dialog class="sheet" id="addSheet" aria-labelledby="addTitle">
   <div class="sheet-head">
-    <h2 id="addTitle">Add to <select id="addMeal" aria-label="Meal"></select></h2>
+    <h2 id="addTitle"><span id="addTitleText">Add to</span> <select id="addMeal" aria-label="Meal"></select></h2>
     <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
   </div>
   <div class="tabs" role="tablist">
@@ -74,6 +74,12 @@
       <input id="q" type="search" placeholder="Search foods, e.g. greek yogurt" autocomplete="off" enterkeyhint="search">
       <button class="btn">Search</button>
     </form>
+    <div class="chips" id="listChips" role="group" aria-label="Your foods">
+      <button type="button" data-list-tab="recents">Recent</button>
+      <button type="button" data-list-tab="favorites">Favorites</button>
+      <button type="button" data-list-tab="meals">My meals</button>
+      <button type="button" data-list-tab="history">History</button>
+    </div>
     <div id="searchStatus" class="status"></div>
     <ul class="results" id="results"></ul>
     <button class="btn ghost wide" id="newCustom">Create a custom food</button>
@@ -117,7 +123,10 @@
       <h2 id="foodName">Food</h2>
       <div class="food-sub" id="foodSub"></div>
     </div>
-    <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+    <div class="head-btns">
+      <button class="icon-btn star" id="favBtn" aria-pressed="false" aria-label="Add to favorites">&#9734;</button>
+      <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+    </div>
   </div>
   <div class="row amount-row">
     <input id="amount" type="number" inputmode="decimal" min="0" step="any" aria-label="Amount">
@@ -128,6 +137,24 @@
   <div class="row end">
     <button class="btn danger" id="deleteEntry" hidden>Delete</button>
     <button class="btn primary" id="logFood">Add to diary</button>
+  </div>
+</dialog>
+
+<!-- Premade meal editor -->
+<dialog class="sheet" id="recipeSheet" aria-labelledby="recipeTitle">
+  <div class="sheet-head">
+    <h2 id="recipeTitle">My meal</h2>
+    <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+  </div>
+  <div class="tab-panel">
+    <label class="field">Meal name<input id="rName" placeholder="e.g. Morning shake" autocomplete="off"></label>
+    <ul class="r-items" id="rItems"></ul>
+    <div class="ai-total" id="rTotal"></div>
+    <button class="btn ghost wide" id="addIngredient">+ Add ingredient</button>
+    <div class="row end">
+      <button class="btn danger" id="deleteRecipe" hidden>Delete meal</button>
+      <button class="btn primary" id="saveRecipe">Save meal</button>
+    </div>
   </div>
 </dialog>
 

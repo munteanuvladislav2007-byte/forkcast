@@ -1,5 +1,5 @@
 // Network-first for the app shell so updates show up immediately; cached copy when offline.
-const CACHE = "forkcast-v2";
+const CACHE = "forkcast-v3";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "manifest.webmanifest", "icon.svg"];
 
 self.addEventListener("install", (e) => {

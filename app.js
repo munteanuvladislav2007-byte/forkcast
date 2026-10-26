@@ -9,7 +9,8 @@ const NUTS = [
   ["kcal", "Energy", "kcal"], ["protein", "Protein", "g"], ["carbs", "Carbs", "g"], ["fat", "Fat", "g"],
   ["fiber", "Fiber", "g"], ["sugar", "Sugars", "g"], ["sodium", "Sodium", "mg"],
 ];
-const MEALS = ["Breakfast", "Lunch", "Dinner", "Snacks"];
+// "Unsorted" is where the general Add buttons put food; drag entries from there into a meal.
+const MEALS = ["Unsorted", "Breakfast", "Lunch", "Dinner", "Snacks"];
 const STORE = "forkcast.v1";
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -24,6 +25,8 @@ const DEFAULTS = {
   settings: { usdaKey: "DEMO_KEY", targets: { kcal: 2200, protein: 150, carbs: 220, fat: 75 } },
   log: {},
   recents: [],
+  favorites: [],
+  recipes: [], // premade meals: { id, name, items: [{ food, grams }] }
 };
 let S = loadState();
 
@@ -114,17 +117,23 @@ function render() {
   $("#meals").innerHTML = MEALS.map((meal) => {
     const list = entries.filter((e) => e.meal === meal);
     const mt = total(list);
-    return `<section class="meal">
+    const unsorted = meal === "Unsorted";
+    if (unsorted && !list.length) return "";
+    return `<section class="meal${unsorted ? " unsorted" : ""}" data-meal="${meal}">
       <div class="meal-head"><h3>${meal}</h3><span class="kcal">${list.length ? r0(mt.kcal) + " kcal" : ""}</span>
+        ${list.length ? `<button class="icon-btn save-meal" data-save-meal="${meal}" aria-label="Save ${meal} as a premade meal" title="Save as a premade meal"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 4h10v16l-5-3.5L7 20z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>` : ""}
         <button class="add-btn" data-add="${meal}">+ Add</button></div>
+      ${unsorted ? `<p class="unsorted-hint">Drag these into a meal with the handle, or leave them here.</p>` : ""}
       ${list.length ? `<ul class="entries">${list.map((e) => {
         const n = scale(e.food, e.grams);
-        const ai = e.food.source === "AI estimate" ? `<span class="src-ai">AI</span>` : "";
-        return `<li class="entry" data-edit="${e.id}"><div class="entry-main"><div class="entry-name">${esc(e.food.name)}${ai}</div>
+        const tag = e.food.source === "AI estimate" ? `<span class="src-ai">AI</span>` : e.food.source === "My meal" ? `<span class="src-ai">Meal</span>` : "";
+        return `<li class="entry" data-edit="${e.id}">
+          <button class="grip" aria-label="Drag ${esc(e.food.name)} to another meal"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button>
+          <div class="entry-main"><div class="entry-name">${esc(e.food.name)}${tag}</div>
           <div class="entry-sub">${fmtGrams(e.grams)} &middot; ${macroLine(n)}</div></div><div class="entry-kcal">${r0(n.kcal)}</div></li>`;
       }).join("")}</ul>` : ""}
     </section>`;
-  }).join("") + (entries.length ? "" : `<p class="empty-day">Nothing logged for ${esc(dayLabel(day).toLowerCase())} yet. Snap a meal, scan a barcode, or search for a food.</p>`);
+  }).join("") + (entries.length ? "" : `<p class="empty-day">Nothing logged for ${esc(dayLabel(day).toLowerCase())} yet. Tap Add food, scan a barcode, or paste a meal from Claude.</p>`);
 }
 
 // ---------- Toast ----------
@@ -145,6 +154,7 @@ function openSheet(id) {
 function closeSheet(d) {
   if (typeof d === "string") d = $(d);
   if (d.open) d.close();
+  if (d.id === "addSheet") onAddClosed();
 }
 $$("dialog.sheet").forEach((d) => {
   d.addEventListener("click", (e) => {
@@ -152,16 +162,29 @@ $$("dialog.sheet").forEach((d) => {
     if (e.target.closest("[data-close]")) closeSheet(d);
   });
 });
-$("#addSheet").addEventListener("close", stopScan);
+// Runs on every way the add sheet can close (buttons, backdrop, Escape); safe to call twice.
+function onAddClosed() {
+  stopScan();
+  if (pickMode) {
+    pickMode = false;
+    showRecipe(); // back to the meal being edited
+  }
+}
+$("#addSheet").addEventListener("close", onAddClosed);
 
 // ---------- Add sheet & tabs ----------
-let addMeal = defaultMeal();
+let addMeal = "Unsorted";
+// When set, picking a food adds it as an ingredient of the premade meal being edited instead of logging it.
+let pickMode = false;
 function fillMealSelect(sel, value) {
   sel.innerHTML = MEALS.map((m) => `<option ${m === value ? "selected" : ""}>${m}</option>`).join("");
 }
-function openAdd(tab, meal) {
-  addMeal = meal || defaultMeal();
+function openAdd(tab, meal, { pick = false } = {}) {
+  pickMode = pick;
+  addMeal = meal || "Unsorted";
   fillMealSelect($("#addMeal"), addMeal);
+  $("#addTitleText").textContent = pick ? `Add ingredient to ${draft.name || "your meal"}` : "Add to";
+  $("#addMeal").hidden = pick;
   openSheet("#addSheet");
   setTab(tab);
 }
@@ -173,7 +196,7 @@ function setTab(tab) {
   if (tab === "scan") startScan();
   else stopScan();
   if (tab === "search") {
-    if (!$("#q").value) renderRecents();
+    if (!$("#q").value) renderList();
     setTimeout(() => $("#q").focus(), 50);
   }
 }
@@ -307,30 +330,67 @@ async function lookupBarcode(raw) {
 }
 
 // ---------- Search tab ----------
-function resultItem(f, i, listName) {
+function resultItem(f, i, listName, extra = "") {
   const badgeCls = f.source.startsWith("USDA") ? "usda" : f.source === "Open Food Facts" ? "off" : f.source === "AI estimate" ? "ai" : "custom";
-  const badge = f.source === "Open Food Facts" ? "OFF" : f.source === "USDA Branded" ? "USDA" : f.source === "AI estimate" ? "AI" : f.source;
+  const badge = f.source === "Open Food Facts" ? "OFF" : f.source === "USDA Branded" ? "USDA" : f.source === "AI estimate" ? "AI" : f.source === "My meal" ? "Meal" : f.source;
   const s = f.servings[0];
   const ref = s ? scale(f, s.grams) : f.per100;
-  const refLabel = s ? "per serving" : "per 100 g";
+  const refLabel = s ? (f.source === "My meal" ? "per meal" : "per serving") : "per 100 g";
+  const star = isFav(f) ? `<span class="fav-mark" aria-label="Favorite">&#9733;</span>` : "";
   return `<li class="result" data-list="${listName}" data-i="${i}">
-    <div class="result-main"><div class="result-name">${esc(f.name)}</div>
+    <div class="result-main"><div class="result-name">${star}${esc(f.name)}</div>
     <div class="result-sub"><span class="badge ${badgeCls}">${esc(badge)}</span> ${esc(f.brand)}</div></div>
-    <div class="result-kcal">${r0(ref.kcal)} kcal<small>${refLabel}</small></div></li>`;
+    <div class="result-kcal">${r0(ref.kcal)} kcal<small>${refLabel}</small></div>${extra}</li>`;
 }
-let lists = { results: [], recents: [] };
-function renderRecents() {
-  lists.recents = S.recents.slice(0, 20);
+let lists = { results: [], recents: [], favorites: [], meals: [], history: [] };
+let listKind = "recents";
+const LIST_EMPTY = {
+  recents: "Foods you log show up here for quick re-adding.",
+  favorites: "Tap the star on any food to keep it here.",
+  meals: "Save foods you often eat together, like a protein shake, and log them in one tap.",
+  history: "Days you log food show up here. Tap any entry to add it again.",
+};
+function renderList(kind = listKind) {
+  listKind = kind;
+  $$("#listChips [data-list-tab]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.listTab === kind)));
   $("#searchStatus").textContent = "";
-  $("#results").innerHTML = lists.recents.length
-    ? `<li class="list-label">Recent foods</li>` + lists.recents.map((f, i) => resultItem(f, i, "recents")).join("")
-    : `<li class="status">Search USDA and Open Food Facts. Foods you log show up here for quick re-adding.</li>`;
+  const R = $("#results");
+  if (kind === "recents" || kind === "favorites") {
+    lists[kind] = kind === "recents" ? S.recents.slice(0, 30) : S.favorites;
+    R.innerHTML = lists[kind].length ? lists[kind].map((f, i) => resultItem(f, i, kind)).join("") : `<li class="status">${LIST_EMPTY[kind]}</li>`;
+  } else if (kind === "meals") {
+    lists.meals = S.recipes.map(recipeFood);
+    R.innerHTML = (pickMode ? "" : `<li class="list-action"><button class="btn ghost wide" id="newRecipe">+ Create a premade meal</button></li>`) +
+      (lists.meals.length
+        ? lists.meals.map((f, i) => resultItem(f, i, "meals", pickMode ? "" : `<button class="icon-btn" data-edit-recipe="${S.recipes[i].id}" aria-label="Edit ${esc(f.name)}">&#9998;</button>`)).join("")
+        : `<li class="status">${LIST_EMPTY.meals}</li>`);
+  } else {
+    lists.history = [];
+    const days = Object.keys(S.log).filter((d) => (S.log[d] || []).length).sort().reverse().slice(0, 30);
+    R.innerHTML = days.length ? days.map((d) => {
+      const es = S.log[d];
+      return `<li class="list-label">${esc(dayLabel(d))} &middot; ${r0(total(es).kcal)} kcal</li>` + es.map((e) => {
+        const i = lists.history.push(e) - 1;
+        const n = scale(e.food, e.grams);
+        return `<li class="result" data-list="history" data-i="${i}"><div class="result-main"><div class="result-name">${esc(e.food.name)}</div>
+          <div class="result-sub">${esc(e.meal)} &middot; ${fmtGrams(e.grams)} &middot; ${macroLine(n)}</div></div><div class="result-kcal">${r0(n.kcal)} kcal</div></li>`;
+      }).join("");
+    }).join("") : `<li class="status">${LIST_EMPTY.history}</li>`;
+  }
 }
+$("#listChips").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-list-tab]");
+  if (!b) return;
+  $("#q").value = "";
+  searchSeq++;
+  renderList(b.dataset.listTab);
+});
 let searchSeq = 0;
 $("#searchForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("#q").value.trim();
-  if (!q) return renderRecents();
+  if (!q) return renderList();
+  $$("#listChips [data-list-tab]").forEach((b) => b.setAttribute("aria-pressed", "false"));
   const seq = ++searchSeq;
   const st = $("#searchStatus");
   st.className = "status";
@@ -354,9 +414,14 @@ $("#searchForm").addEventListener("submit", async (e) => {
   $("#results").innerHTML = lists.results.map((f, i) => resultItem(f, i, "results")).join("");
 });
 $("#results").addEventListener("click", (e) => {
+  if (e.target.closest("#newRecipe")) { closeSheet("#addSheet"); return openRecipe(null); }
+  const er = e.target.closest("[data-edit-recipe]");
+  if (er) { closeSheet("#addSheet"); return openRecipe(er.dataset.editRecipe); }
   const li = e.target.closest(".result");
   if (!li) return;
-  openFood(lists[li.dataset.list][+li.dataset.i], { meal: addMeal });
+  const item = lists[li.dataset.list][+li.dataset.i];
+  if (li.dataset.list === "history") openFood(item.food, { grams: item.grams, meal: addMeal });
+  else openFood(item, { meal: addMeal });
 });
 
 // ---------- Barcode tab ----------
@@ -485,7 +550,7 @@ function openFood(food, { grams, meal, entryId } = {}) {
   detail = { food, entryId, meal: meal || addMeal || defaultMeal() };
   $("#foodName").textContent = food.name;
   $("#foodSub").textContent = [food.brand, food.source].filter(Boolean).join(" · ");
-  $("#unit").innerHTML = (food.servings || []).map((s, i) => `<option value="${i}">${esc(s.label)}</option>`).join("") + `<option value="g">grams</option>`;
+  $("#unit").innerHTML = (food.servings || []).map((s, i) => `<option value="${i}">${esc(s.label)}</option>`).join("") + `<option value="g">g / ml</option>`;
   if (grams != null) {
     $("#unit").value = "g";
     $("#amount").value = r1(grams);
@@ -498,10 +563,38 @@ function openFood(food, { grams, meal, entryId } = {}) {
   }
   fillMealSelect($("#foodMeal"), detail.meal);
   $("#deleteEntry").hidden = !entryId;
-  $("#logFood").textContent = entryId ? "Save" : "Add to diary";
+  $("#foodMeal").hidden = pickMode;
+  $("#logFood").textContent = pickMode ? "Add to meal" : entryId ? "Save" : "Add to diary";
+  $("#favBtn").hidden = food.source === "My meal";
+  updateFavBtn();
   renderFoodNutrients();
   openSheet("#foodSheet");
 }
+
+// ---------- Favorites ----------
+function isFav(food) {
+  return S.favorites.some((f) => f.id === food.id);
+}
+function updateFavBtn() {
+  const on = isFav(detail.food);
+  const b = $("#favBtn");
+  b.innerHTML = on ? "&#9733;" : "&#9734;";
+  b.setAttribute("aria-pressed", String(on));
+  b.setAttribute("aria-label", on ? "Remove from favorites" : "Add to favorites");
+}
+$("#favBtn").addEventListener("click", () => {
+  const f = detail.food;
+  if (isFav(f)) {
+    S.favorites = S.favorites.filter((x) => x.id !== f.id);
+    toast("Removed from favorites");
+  } else {
+    S.favorites = [f, ...S.favorites];
+    toast("Added to favorites");
+  }
+  save();
+  updateFavBtn();
+  if ($("#addSheet").open && !$("#q").value) renderList();
+});
 function detailGrams() {
   const amt = parseFloat($("#amount").value) || 0;
   const u = $("#unit").value;
@@ -546,6 +639,15 @@ function addEntry(food, grams, meal) {
 $("#logFood").addEventListener("click", () => {
   const g = detailGrams();
   if (!(g > 0)) return toast("Enter an amount above zero.");
+  if (pickMode) {
+    draft.items.push({ food: detail.food, grams: g });
+    remember(detail.food);
+    save();
+    closeSheet("#foodSheet");
+    closeSheet("#addSheet"); // reopens the meal editor
+    toast(`Added ${detail.food.name}`);
+    return;
+  }
   const meal = $("#foodMeal").value;
   if (detail.entryId) {
     const e = (S.log[day] || []).find((x) => x.id === detail.entryId);
@@ -568,13 +670,148 @@ $("#deleteEntry").addEventListener("click", () => {
   toast("Deleted");
 });
 $("#meals").addEventListener("click", (e) => {
+  if (e.target.closest(".grip")) return;
   const add = e.target.closest("[data-add]");
   if (add) return openAdd("search", add.dataset.add);
+  const sm = e.target.closest("[data-save-meal]");
+  if (sm) {
+    const items = (S.log[day] || []).filter((x) => x.meal === sm.dataset.saveMeal).map((x) => ({ food: x.food, grams: x.grams }));
+    return openRecipe(null, items);
+  }
   const li = e.target.closest("[data-edit]");
   if (li) {
     const en = (S.log[day] || []).find((x) => x.id === li.dataset.edit);
     if (en) openFood(en.food, { grams: en.grams, meal: en.meal, entryId: en.id });
   }
+});
+
+// ---------- Drag entries between meals ----------
+// Pointer events work for both mouse and touch; the grip has touch-action:none so dragging it doesn't scroll the page.
+// While dragging, an empty Unsorted section appears so entries can be moved back there too.
+let drag = null;
+$("#meals").addEventListener("pointerdown", (e) => {
+  const grip = e.target.closest(".grip");
+  if (!grip || e.button > 0) return;
+  e.preventDefault();
+  const li = grip.closest(".entry");
+  const rect = li.getBoundingClientRect();
+  if (!$('.meal[data-meal="Unsorted"]')) {
+    $("#meals").insertAdjacentHTML("afterbegin", `<section class="meal unsorted drop-only" data-meal="Unsorted"><div class="meal-head"><h3>Unsorted</h3></div></section>`);
+  }
+  const ghost = li.cloneNode(true);
+  ghost.classList.add("drag-ghost");
+  Object.assign(ghost.style, { width: rect.width + "px", left: rect.left + "px", top: rect.top + "px" });
+  document.body.appendChild(ghost);
+  li.classList.add("dragging");
+  drag = { id: li.dataset.edit, li, ghost, dy: e.clientY - rect.top, target: null };
+  try { grip.setPointerCapture(e.pointerId); } catch {}
+  try { navigator.vibrate && navigator.vibrate(15); } catch {}
+});
+window.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  drag.ghost.style.top = e.clientY - drag.dy + "px";
+  const sec = document.elementFromPoint(e.clientX, e.clientY)?.closest(".meal");
+  if (sec !== drag.target) {
+    drag.target?.classList.remove("drop");
+    drag.target = sec || null;
+    drag.target?.classList.add("drop");
+  }
+  if (e.clientY < 90) window.scrollBy(0, -14);
+  else if (e.clientY > innerHeight - 120) window.scrollBy(0, 14);
+});
+function endDrag() {
+  if (!drag) return;
+  const { id, ghost, li, target } = drag;
+  drag = null;
+  ghost.remove();
+  li.classList.remove("dragging");
+  const en = (S.log[day] || []).find((x) => x.id === id);
+  const meal = target?.dataset.meal;
+  if (en && meal && meal !== en.meal) {
+    en.meal = meal;
+    save();
+    toast(`Moved to ${meal}`);
+  }
+  render();
+}
+window.addEventListener("pointerup", endDrag);
+window.addEventListener("pointercancel", endDrag);
+
+// ---------- Premade meals ----------
+// A premade meal logs as one entry whose nutrients are the sum of its ingredients; its serving is "1 meal".
+function recipeFood(r) {
+  const g = r.items.reduce((a, x) => a + x.grams, 0) || 1;
+  const k = 100 / g;
+  return {
+    id: "meal:" + r.id, name: r.name, brand: r.items.map((x) => x.food.name).join(", "), source: "My meal",
+    per100: Object.fromEntries(Object.entries(total(r.items)).map(([key, v]) => [key, v * k])),
+    servings: [{ label: `1 meal (${r1(g)} g)`, grams: g }],
+  };
+}
+let draft = null;
+function openRecipe(id, items = []) {
+  const r = id && S.recipes.find((x) => x.id === id);
+  draft = r ? structuredClone(r) : { id: uid(), name: "", items: structuredClone(items) };
+  $("#deleteRecipe").hidden = !r;
+  showRecipe();
+  if (!r) setTimeout(() => $("#rName").focus(), 50);
+}
+function showRecipe() {
+  $("#rName").value = draft.name;
+  renderDraft();
+  openSheet("#recipeSheet");
+}
+function renderDraft() {
+  $("#rItems").innerHTML = draft.items.length ? draft.items.map((x, i) => {
+    const n = scale(x.food, x.grams);
+    return `<li class="ai-item r-item">
+      <div class="nm">${esc(x.food.name)}<small data-r-mac="${i}">${r0(n.kcal)} kcal &middot; ${macroLine(n)}</small></div>
+      <label class="g"><input type="number" inputmode="decimal" step="any" min="0" value="${r1(x.grams)}" data-r-g="${i}" aria-label="Grams of ${esc(x.food.name)}"> g</label>
+      <button class="icon-btn" data-r-del="${i}" aria-label="Remove ${esc(x.food.name)}">&#10005;</button></li>`;
+  }).join("") : `<li class="status">No ingredients yet. Add them from search, barcode, favorites, or a meal from Claude.</li>`;
+  renderDraftTotal();
+}
+function renderDraftTotal() {
+  const t = total(draft.items);
+  $("#rTotal").innerHTML = `<span>Total</span><span>${r0(t.kcal)} kcal &middot; ${r1(t.protein)}P ${r1(t.carbs)}C ${r1(t.fat)}F</span>`;
+}
+$("#rName").addEventListener("input", (e) => (draft.name = e.target.value));
+$("#rItems").addEventListener("input", (e) => {
+  const i = e.target.dataset.rG;
+  if (i == null) return;
+  const x = draft.items[+i];
+  x.grams = parseFloat(e.target.value) || 0;
+  const n = scale(x.food, x.grams);
+  $(`[data-r-mac="${i}"]`).innerHTML = `${r0(n.kcal)} kcal &middot; ${macroLine(n)}`;
+  renderDraftTotal();
+});
+$("#rItems").addEventListener("click", (e) => {
+  const d = e.target.closest("[data-r-del]");
+  if (!d) return;
+  draft.items.splice(+d.dataset.rDel, 1);
+  renderDraft();
+});
+$("#addIngredient").addEventListener("click", () => {
+  closeSheet("#recipeSheet");
+  openAdd("search", null, { pick: true });
+});
+$("#saveRecipe").addEventListener("click", () => {
+  draft.name = $("#rName").value.trim();
+  draft.items = draft.items.filter((x) => x.grams > 0);
+  if (!draft.name) { $("#rName").focus(); return toast("Give the meal a name."); }
+  if (!draft.items.length) return toast("Add at least one ingredient.");
+  const i = S.recipes.findIndex((x) => x.id === draft.id);
+  if (i >= 0) S.recipes[i] = draft;
+  else S.recipes.unshift(draft);
+  save();
+  closeSheet("#recipeSheet");
+  toast(`Saved "${draft.name}" to My meals`);
+});
+$("#deleteRecipe").addEventListener("click", () => {
+  S.recipes = S.recipes.filter((x) => x.id !== draft.id);
+  save();
+  closeSheet("#recipeSheet");
+  toast("Meal deleted");
 });
 
 // ---------- Custom food ----------
@@ -697,8 +934,8 @@ function showAi(data) {
     <div class="ai-total" id="aiTotal"></div>
     ${data.notes ? `<div class="ai-notes">${esc(data.notes)}</div>` : ""}
     <div class="ai-actions">
-      <label class="check"><input type="checkbox" id="aiCombine"> Log as one entry named "${esc(aiMealName)}"</label>
-      <button class="btn primary wide" id="aiLog">Add to ${esc(addMeal)}</button>
+      <label class="check" ${pickMode ? "hidden" : ""}><input type="checkbox" id="aiCombine"> Log as one entry named "${esc(aiMealName)}"</label>
+      <button class="btn primary wide" id="aiLog">${pickMode ? "Add to meal" : `Add to ${esc(addMeal)}`}</button>
     </div></div>`;
   renderAiItems();
 }
@@ -735,6 +972,12 @@ $("#aiResult").addEventListener("click", (e) => {
   if (!e.target.closest("#aiLog")) return;
   const chosen = aiItems.filter((x) => x.on && x.grams > 0);
   if (!chosen.length) return toast("Select at least one item.");
+  if (pickMode) {
+    for (const x of chosen) draft.items.push({ food: x.food, grams: x.grams });
+    resetAi();
+    closeSheet("#addSheet"); // reopens the meal editor
+    return;
+  }
   if ($("#aiCombine").checked) {
     const t = total(chosen);
     const g = chosen.reduce((a, x) => a + x.grams, 0);
@@ -780,7 +1023,7 @@ $("#settingsForm").addEventListener("submit", (e) => {
   toast("Settings saved");
 });
 $("#exportData").addEventListener("click", () => {
-  const data = { log: S.log, recents: S.recents, targets: S.settings.targets, exported: new Date().toISOString() };
+  const data = { log: S.log, recents: S.recents, favorites: S.favorites, recipes: S.recipes, targets: S.settings.targets, exported: new Date().toISOString() };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
   a.download = `forkcast-${iso()}.json`;
@@ -796,6 +1039,8 @@ $("#importData").addEventListener("change", async (e) => {
     if (!d.log || typeof d.log !== "object") throw new Error();
     S.log = { ...S.log, ...d.log };
     if (Array.isArray(d.recents)) S.recents = d.recents;
+    if (Array.isArray(d.favorites)) S.favorites = d.favorites;
+    if (Array.isArray(d.recipes)) S.recipes = d.recipes;
     if (d.targets) S.settings.targets = { ...S.settings.targets, ...d.targets };
     save();
     render();
