@@ -1005,17 +1005,85 @@ function resetAi() {
 }
 
 // ---------- Settings ----------
+// ---------- Macro split ----------
+// Targets are set as calories plus a protein/carbs/fat percent split (whole numbers that always sum to 100);
+// gram goals are derived from those.
+const MACROS = ["protein", "carbs", "fat"];
+const KCAL_PER_G = { protein: 4, carbs: 4, fat: 9 };
+const CAP = { protein: "Protein", carbs: "Carbs", fat: "Fat" };
+let split = null;
+function splitFromTargets(T) {
+  if (T.split) return { ...T.split };
+  // Older saves only have gram goals: work out the percents they imply.
+  const k = MACROS.map((m) => (T[m] || 0) * KCAL_PER_G[m]);
+  const sum = k.reduce((a, b) => a + b, 0);
+  if (!sum) return { protein: 30, carbs: 40, fat: 30 };
+  const p = Math.round((k[0] / sum) * 100), c = Math.round((k[1] / sum) * 100);
+  return { protein: p, carbs: c, fat: 100 - p - c };
+}
+function macroGrams(kcal, m) {
+  return Math.round((kcal * split[m]) / 100 / KCAL_PER_G[m]);
+}
+// Set one macro's percent and scale the other two to fill the rest, keeping their ratio.
+function setPct(m, v) {
+  v = Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+  const [a, b] = MACROS.filter((x) => x !== m);
+  const rest = 100 - v;
+  const old = split[a] + split[b];
+  const na = old > 0 ? Math.round((split[a] / old) * rest) : Math.round(rest / 2);
+  split = { ...split, [m]: v, [a]: na, [b]: rest - na };
+  renderSplit();
+}
+function renderSplit() {
+  const kcal = Math.max(0, parseFloat($("#tKcal").value) || 0);
+  for (const m of MACROS) {
+    $(`#rg${CAP[m]}`).value = split[m];
+    $(`#pc${CAP[m]}`).value = split[m];
+    $(`#g${CAP[m]}`).textContent = `${macroGrams(kcal, m)} g`;
+    $(`#bar${CAP[m]}`).style.width = split[m] + "%";
+  }
+  const key = MACROS.map((m) => split[m]).join(",");
+  $$("#splitPresets [data-split]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.split === key)));
+}
+$("#settingsSheet").addEventListener("input", (e) => {
+  if (e.target.id === "tKcal") return renderSplit();
+  if (e.target.type === "range" && e.target.dataset.macro) setPct(e.target.dataset.macro, e.target.value);
+});
+$("#settingsSheet").addEventListener("change", (e) => {
+  if (e.target.type === "number" && e.target.dataset.macro) {
+    setPct(e.target.dataset.macro, e.target.value);
+    e.target.value = split[e.target.dataset.macro];
+  }
+});
+$("#splitPresets").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-split]");
+  if (!b) return;
+  const [p, c, f] = b.dataset.split.split(",").map(Number);
+  split = { protein: p, carbs: c, fat: f };
+  renderSplit();
+});
+
 function openSettings() {
   const T = S.settings.targets;
-  $("#tKcal").value = T.kcal; $("#tProtein").value = T.protein; $("#tCarbs").value = T.carbs; $("#tFat").value = T.fat;
+  $("#tKcal").value = T.kcal;
+  split = splitFromTargets(T);
+  renderSplit();
   $("#sUsda").value = S.settings.usdaKey;
   openSheet("#settingsSheet");
 }
 $("#openSettings").addEventListener("click", openSettings);
 $("#settingsForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  const n = (id, d) => Math.max(0, parseFloat($(id).value) || d);
-  S.settings.targets = { kcal: n("#tKcal", 2000), protein: n("#tProtein", 0), carbs: n("#tCarbs", 0), fat: n("#tFat", 0) };
+  // A percent box still being typed in hasn't fired "change" yet.
+  const typing = document.activeElement;
+  if (typing?.type === "number" && typing.dataset.macro && Number(typing.value) !== split[typing.dataset.macro]) {
+    setPct(typing.dataset.macro, typing.value);
+  }
+  const kcal = Math.max(0, parseFloat($("#tKcal").value) || 2000);
+  S.settings.targets = {
+    kcal, split: { ...split },
+    protein: macroGrams(kcal, "protein"), carbs: macroGrams(kcal, "carbs"), fat: macroGrams(kcal, "fat"),
+  };
   S.settings.usdaKey = $("#sUsda").value.trim() || "DEMO_KEY";
   save();
   closeSheet("#settingsSheet");

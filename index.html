@@ -187,10 +187,35 @@
   </div>
   <form id="settingsForm" class="grid-form">
     <h3 class="span2">Daily targets</h3>
-    <label class="field">Calories (kcal)<input id="tKcal" type="number" inputmode="numeric"></label>
-    <label class="field">Protein (g)<input id="tProtein" type="number" inputmode="numeric"></label>
-    <label class="field">Carbs (g)<input id="tCarbs" type="number" inputmode="numeric"></label>
-    <label class="field">Fat (g)<input id="tFat" type="number" inputmode="numeric"></label>
+    <label class="field span2">Calories (kcal)<input id="tKcal" type="number" inputmode="numeric" min="0"></label>
+    <div class="span2 split">
+      <div class="split-bar" aria-hidden="true"><i class="p" id="barProtein"></i><i class="c" id="barCarbs"></i><i class="f" id="barFat"></i></div>
+      <div class="split-row p">
+        <label for="rgProtein">Protein</label>
+        <input type="range" id="rgProtein" min="0" max="100" step="1" data-macro="protein">
+        <span class="pct"><input type="number" id="pcProtein" min="0" max="100" inputmode="numeric" data-macro="protein" aria-label="Protein percent">%</span>
+        <span class="grams" id="gProtein"></span>
+      </div>
+      <div class="split-row c">
+        <label for="rgCarbs">Carbs</label>
+        <input type="range" id="rgCarbs" min="0" max="100" step="1" data-macro="carbs">
+        <span class="pct"><input type="number" id="pcCarbs" min="0" max="100" inputmode="numeric" data-macro="carbs" aria-label="Carbs percent">%</span>
+        <span class="grams" id="gCarbs"></span>
+      </div>
+      <div class="split-row f">
+        <label for="rgFat">Fat</label>
+        <input type="range" id="rgFat" min="0" max="100" step="1" data-macro="fat">
+        <span class="pct"><input type="number" id="pcFat" min="0" max="100" inputmode="numeric" data-macro="fat" aria-label="Fat percent">%</span>
+        <span class="grams" id="gFat"></span>
+      </div>
+      <div class="chips" id="splitPresets" role="group" aria-label="Macro presets">
+        <button type="button" data-split="30,40,30">Balanced</button>
+        <button type="button" data-split="40,35,25">High protein</button>
+        <button type="button" data-split="35,25,40">Low carb</button>
+        <button type="button" data-split="25,5,70">Keto</button>
+      </div>
+      <p class="hint">Percentages always add up to 100. Change one and the other two adjust. Protein and carbs have 4 kcal per gram, fat has 9.</p>
+    </div>
 
     <h3 class="span2">Food search</h3>
     <label class="field span2">USDA FoodData Central API key
