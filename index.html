@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Forkcast</title>
+<meta name="theme-color" content="#f3f6f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111a17" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Forkcast">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">Forkcast</div>
+  <nav class="daynav" aria-label="Change day">
+    <button class="icon-btn" id="prevDay" aria-label="Previous day">&#8249;</button>
+    <button class="day-label" id="dayLabel" aria-label="Jump to today">Today</button>
+    <button class="icon-btn" id="nextDay" aria-label="Next day">&#8250;</button>
+  </nav>
+  <button class="icon-btn" id="openSettings" aria-label="Settings">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8.6 4.6-.1-2.2 2-1.6-2-3.4-2.4.9a8 8 0 0 0-1.9-1.1L15.8 3h-4l-.4 2.6c-.7.3-1.3.6-1.9 1.1l-2.4-.9-2 3.4 2 1.6a8 8 0 0 0 0 2.2l-2 1.6 2 3.4 2.4-.9c.6.5 1.2.8 1.9 1.1l.4 2.6h4l.4-2.6c.7-.3 1.3-.6 1.9-1.1l2.4.9 2-3.4-2-1.4Z" opacity=".9"/></svg>
+  </button>
+</header>
+
+<main class="wrap">
+  <section class="summary" aria-label="Daily summary">
+    <div class="ring-box">
+      <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+        <circle cx="60" cy="60" r="52" class="ring-track"/>
+        <circle cx="60" cy="60" r="52" class="ring-fill" id="ringFill"/>
+      </svg>
+      <div class="ring-text">
+        <span class="ring-num" id="kcalLeft">0</span>
+        <span class="ring-cap" id="kcalLeftCap">kcal left</span>
+      </div>
+    </div>
+    <div class="summary-side">
+      <div class="eaten"><span id="kcalEaten">0</span> / <span id="kcalTarget">0</span> kcal eaten</div>
+      <div class="macros" id="macroBars"></div>
+    </div>
+  </section>
+
+  <div id="meals"></div>
+  <p class="foot-note">Food data: USDA FoodData Central and Open Food Facts. Meal estimates from Claude are approximate.</p>
+</main>
+
+<nav class="actionbar" aria-label="Add food">
+  <button class="act" data-open="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Search</span></button>
+  <button class="act" data-open="scan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h3M18 4h3v3M21 17v3h-3M6 20H3v-3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 8v8M10 8v8M12.5 8v8M15 8v8M17 8v8" stroke="currentColor" stroke-width="1.6"/></svg><span>Scan</span></button>
+  <button class="act act-main" data-open="claude"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="4" width="10" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 4h4v2.5h-4z" fill="currentColor"/><path d="M10 12h4M10 15.5h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>From Claude</span></button>
+</nav>
+
+<!-- Add food sheet -->
+<dialog class="sheet" id="addSheet" aria-labelledby="addTitle">
+  <div class="sheet-head">
+    <h2 id="addTitle">Add to <select id="addMeal" aria-label="Meal"></select></h2>
+    <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+  </div>
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="search">Search</button>
+    <button role="tab" data-tab="scan">Barcode</button>
+    <button role="tab" data-tab="claude">From Claude</button>
+  </div>
+
+  <section class="tab-panel" data-panel="search">
+    <form id="searchForm" class="row">
+      <input id="q" type="search" placeholder="Search foods, e.g. greek yogurt" autocomplete="off" enterkeyhint="search">
+      <button class="btn">Search</button>
+    </form>
+    <div id="searchStatus" class="status"></div>
+    <ul class="results" id="results"></ul>
+    <button class="btn ghost wide" id="newCustom">Create a custom food</button>
+  </section>
+
+  <section class="tab-panel" data-panel="scan">
+    <div class="scanner">
+      <video id="scanVideo" playsinline muted></video>
+      <div class="scan-frame" aria-hidden="true"></div>
+    </div>
+    <div id="scanStatus" class="status"></div>
+    <form id="codeForm" class="row">
+      <input id="codeInput" inputmode="numeric" placeholder="Or type the barcode number" autocomplete="off">
+      <button class="btn">Look up</button>
+    </form>
+    <label class="btn ghost wide file-btn">Scan barcode from a photo
+      <input type="file" accept="image/*" id="codePhoto" hidden>
+    </label>
+    <div id="scanResult"></div>
+  </section>
+
+  <section class="tab-panel" data-panel="claude">
+    <ol class="steps">
+      <li>In your Forkcast project in Claude, send a photo and a line about the meal.</li>
+      <li>Copy the <code>FORKCAST</code> block at the end of Claude's reply.</li>
+      <li>Paste it here.</li>
+    </ol>
+    <button class="btn primary wide" id="pasteBtn">Paste from Claude</button>
+    <label class="field">Or paste it into this box
+      <textarea id="pasteBox" rows="3" placeholder='FORKCAST {"meal":"Chicken bowl","items":[...]}'></textarea>
+    </label>
+    <div id="aiStatus" class="status"></div>
+    <div id="aiResult"></div>
+  </section>
+</dialog>
+
+<!-- Food detail sheet -->
+<dialog class="sheet" id="foodSheet" aria-labelledby="foodName">
+  <div class="sheet-head">
+    <div class="food-title">
+      <h2 id="foodName">Food</h2>
+      <div class="food-sub" id="foodSub"></div>
+    </div>
+    <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+  </div>
+  <div class="row amount-row">
+    <input id="amount" type="number" inputmode="decimal" min="0" step="any" aria-label="Amount">
+    <select id="unit" aria-label="Unit"></select>
+    <select id="foodMeal" aria-label="Meal"></select>
+  </div>
+  <div id="foodNutrients"></div>
+  <div class="row end">
+    <button class="btn danger" id="deleteEntry" hidden>Delete</button>
+    <button class="btn primary" id="logFood">Add to diary</button>
+  </div>
+</dialog>
+
+<!-- Custom food sheet -->
+<dialog class="sheet" id="customSheet" aria-labelledby="customTitle">
+  <div class="sheet-head">
+    <h2 id="customTitle">Custom food</h2>
+    <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+  </div>
+  <form id="customForm" class="grid-form">
+    <label class="field span2">Name<input id="cName" required></label>
+    <label class="field span2">Brand (optional)<input id="cBrand"></label>
+    <label class="field">Serving size (g)<input id="cServing" type="number" inputmode="decimal" step="any" value="100" required></label>
+    <label class="field">Calories (kcal)<input id="cKcal" type="number" inputmode="decimal" step="any" required></label>
+    <label class="field">Protein (g)<input id="cProtein" type="number" inputmode="decimal" step="any" value="0"></label>
+    <label class="field">Carbs (g)<input id="cCarbs" type="number" inputmode="decimal" step="any" value="0"></label>
+    <label class="field">Fat (g)<input id="cFat" type="number" inputmode="decimal" step="any" value="0"></label>
+    <label class="field">Fiber (g)<input id="cFiber" type="number" inputmode="decimal" step="any" value="0"></label>
+    <input id="cCode" type="hidden">
+    <p class="hint span2">Enter the values for one serving, as printed on the label.</p>
+    <button class="btn primary wide span2">Save food</button>
+  </form>
+</dialog>
+
+<!-- Settings sheet -->
+<dialog class="sheet" id="settingsSheet" aria-labelledby="settingsTitle">
+  <div class="sheet-head">
+    <h2 id="settingsTitle">Settings</h2>
+    <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+  </div>
+  <form id="settingsForm" class="grid-form">
+    <h3 class="span2">Daily targets</h3>
+    <label class="field">Calories (kcal)<input id="tKcal" type="number" inputmode="numeric"></label>
+    <label class="field">Protein (g)<input id="tProtein" type="number" inputmode="numeric"></label>
+    <label class="field">Carbs (g)<input id="tCarbs" type="number" inputmode="numeric"></label>
+    <label class="field">Fat (g)<input id="tFat" type="number" inputmode="numeric"></label>
+
+    <h3 class="span2">Food search</h3>
+    <label class="field span2">USDA FoodData Central API key
+      <input id="sUsda" autocomplete="off" placeholder="DEMO_KEY">
+    </label>
+    <p class="hint span2">DEMO_KEY works but is rate limited. A free personal key from api.data.gov removes the limit.</p>
+
+    <button class="btn primary wide span2">Save settings</button>
+    <div class="row span2">
+      <button type="button" class="btn ghost" id="exportData">Export diary (JSON)</button>
+      <label class="btn ghost file-btn">Import diary<input type="file" accept="application/json" id="importData" hidden></label>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "Forkcast",
+  "short_name": "Forkcast",
+  "description": "Calorie and macro diary with barcode scanning, food search and AI photo estimates.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f6f4",
+  "theme_color": "#0d7a5f",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
