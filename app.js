@@ -27,6 +27,9 @@ const DEFAULTS = {
   recents: [],
   favorites: [],
   recipes: [], // premade meals: { id, name, items: [{ food, grams }] }
+  batches: [], // cooked batches: { id, name, items (raw), reading, containerId, cookedWeight, finished, at }
+  containers: [], // { id, name, tare }
+  yields: {}, // cooked foods, keyed by raw food id: { key, food (raw), samples: [{ raw, cooked, at, batchId? }] }
 };
 let S = loadState();
 
@@ -90,6 +93,8 @@ function fmtGrams(g) {
   return `${r1(g)} g`;
 }
 
+const SOURCE_TAG = { "AI estimate": "AI", "My meal": "Meal", Batch: "Batch", Cooked: "Cooked" };
+
 // ---------- Diary render ----------
 function render() {
   $("#dayLabel").textContent = dayLabel(day);
@@ -126,7 +131,7 @@ function render() {
       ${unsorted ? `<p class="unsorted-hint">Drag these into a meal with the handle, or leave them here.</p>` : ""}
       ${list.length ? `<ul class="entries">${list.map((e) => {
         const n = scale(e.food, e.grams);
-        const tag = e.food.source === "AI estimate" ? `<span class="src-ai">AI</span>` : e.food.source === "My meal" ? `<span class="src-ai">Meal</span>` : "";
+        const tag = SOURCE_TAG[e.food.source] ? `<span class="src-ai">${SOURCE_TAG[e.food.source]}</span>` : "";
         return `<li class="entry" data-edit="${e.id}">
           <button class="grip" aria-label="Drag ${esc(e.food.name)} to another meal"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button>
           <div class="entry-main"><div class="entry-name">${esc(e.food.name)}${tag}</div>
@@ -167,15 +172,18 @@ function onAddClosed() {
   stopScan();
   if (pickMode) {
     pickMode = false;
-    showRecipe(); // back to the meal being edited
+    editing === "batch" ? showBatch() : showRecipe(); // back to what was being edited
   }
 }
 $("#addSheet").addEventListener("close", onAddClosed);
 
 // ---------- Add sheet & tabs ----------
 let addMeal = "Unsorted";
-// When set, picking a food adds it as an ingredient of the premade meal being edited instead of logging it.
+// When set, picking a food adds it as an ingredient of the premade meal or batch being edited (`draft`)
+// instead of logging it. `editing` says which of the two sheets to return to.
 let pickMode = false;
+let editing = "recipe";
+const pickTarget = () => (editing === "batch" ? "batch" : "meal");
 function fillMealSelect(sel, value) {
   sel.innerHTML = MEALS.map((m) => `<option ${m === value ? "selected" : ""}>${m}</option>`).join("");
 }
@@ -183,7 +191,7 @@ function openAdd(tab, meal, { pick = false } = {}) {
   pickMode = pick;
   addMeal = meal || "Unsorted";
   fillMealSelect($("#addMeal"), addMeal);
-  $("#addTitleText").textContent = pick ? `Add ingredient to ${draft.name || "your meal"}` : "Add to";
+  $("#addTitleText").textContent = pick ? `Add ingredient to ${draft.name || "your " + pickTarget()}` : "Add to";
   $("#addMeal").hidden = pick;
   openSheet("#addSheet");
   setTab(tab);
@@ -192,7 +200,7 @@ $("#addMeal").addEventListener("change", (e) => (addMeal = e.target.value));
 
 function setTab(tab) {
   $$(".tabs [data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
-  $$(".tab-panel").forEach((p) => (p.hidden = p.dataset.panel !== tab));
+  $$("#addSheet .tab-panel").forEach((p) => (p.hidden = p.dataset.panel !== tab));
   if (tab === "scan") startScan();
   else stopScan();
   if (tab === "search") {
@@ -333,7 +341,7 @@ async function lookupBarcode(raw) {
 function resultItem(f, i, listName, extra = "") {
   const badgeCls = f.source.startsWith("USDA") ? "usda" : f.source === "Open Food Facts" ? "off" : f.source === "AI estimate" ? "ai" : "custom";
   const badge = f.source === "Open Food Facts" ? "OFF" : f.source === "USDA Branded" ? "USDA" : f.source === "AI estimate" ? "AI" : f.source === "My meal" ? "Meal" : f.source;
-  const s = f.servings[0];
+  const s = f.source === "Batch" ? null : f.servings[0];
   const ref = s ? scale(f, s.grams) : f.per100;
   const refLabel = s ? (f.source === "My meal" ? "per meal" : "per serving") : "per 100 g";
   const star = isFav(f) ? `<span class="fav-mark" aria-label="Favorite">&#9733;</span>` : "";
@@ -342,7 +350,7 @@ function resultItem(f, i, listName, extra = "") {
     <div class="result-sub"><span class="badge ${badgeCls}">${esc(badge)}</span> ${esc(f.brand)}</div></div>
     <div class="result-kcal">${r0(ref.kcal)} kcal<small>${refLabel}</small></div>${extra}</li>`;
 }
-let lists = { results: [], recents: [], favorites: [], meals: [], history: [] };
+let lists = { results: [], recents: [], favorites: [], meals: [], history: [], batches: [], cooked: [] };
 let listKind = "recents";
 const LIST_EMPTY = {
   recents: "Foods you log show up here for quick re-adding.",
@@ -364,6 +372,20 @@ function renderList(kind = listKind) {
       (lists.meals.length
         ? lists.meals.map((f, i) => resultItem(f, i, "meals", pickMode ? "" : `<button class="icon-btn" data-edit-recipe="${S.recipes[i].id}" aria-label="Edit ${esc(f.name)}">&#9998;</button>`)).join("")
         : `<li class="status">${LIST_EMPTY.meals}</li>`);
+  } else if (kind === "cooking") {
+    lists.batches = S.batches.filter((b) => !b.finished);
+    lists.cooked = Object.values(S.yields).sort((a, b) => a.food.name.localeCompare(b.food.name)).map(cookedFood);
+    const edit = (attr, id, name) => (pickMode ? "" : `<button class="icon-btn" ${attr}="${id}" aria-label="Edit ${esc(name)}">&#9998;</button>`);
+    R.innerHTML = (pickMode ? "" : `<li class="list-action"><button class="btn ghost wide" id="newBatch">+ Start a cooked batch</button></li>`) +
+      `<li class="list-label">Batches</li>` +
+      (lists.batches.length ? lists.batches.map((b, i) => b.cookedWeight
+        ? resultItem(batchFood(b), i, "batches", edit("data-edit-batch", b.id, b.name))
+        : `<li class="result" data-list="batches" data-i="${i}"><div class="result-main"><div class="result-name">${esc(b.name)}</div>
+            <div class="result-sub"><span class="badge custom">Batch</span> Not weighed yet. Tap to add the cooked weight.</div></div></li>`).join("")
+        : `<li class="status">Start a batch when you cook several portions at once: weigh it raw, then weigh it cooked.</li>`) +
+      `<li class="list-label">Cooked foods</li>` +
+      (lists.cooked.length ? lists.cooked.map((f, i) => resultItem(f, i, "cooked", edit("data-edit-yield", f.yieldKey, f.name))).join("")
+        : `<li class="status">Foods you cook in a batch show up here with their average cooked weight. Next time you can just weigh your plate.</li>`);
   } else {
     lists.history = [];
     const days = Object.keys(S.log).filter((d) => (S.log[d] || []).length).sort().reverse().slice(0, 30);
@@ -417,11 +439,22 @@ $("#results").addEventListener("click", (e) => {
   if (e.target.closest("#newRecipe")) { closeSheet("#addSheet"); return openRecipe(null); }
   const er = e.target.closest("[data-edit-recipe]");
   if (er) { closeSheet("#addSheet"); return openRecipe(er.dataset.editRecipe); }
+  if (e.target.closest("#newBatch")) { closeSheet("#addSheet"); return openBatch(null); }
+  const eb = e.target.closest("[data-edit-batch]");
+  if (eb) { closeSheet("#addSheet"); return openBatch(eb.dataset.editBatch); }
+  const ey = e.target.closest("[data-edit-yield]");
+  if (ey) return openYield(ey.dataset.editYield);
   const li = e.target.closest(".result");
   if (!li) return;
   const item = lists[li.dataset.list][+li.dataset.i];
-  if (li.dataset.list === "history") openFood(item.food, { grams: item.grams, meal: addMeal });
-  else openFood(item, { meal: addMeal });
+  if (li.dataset.list === "history") return openFood(item.food, { grams: item.grams, meal: addMeal });
+  if (li.dataset.list === "batches") {
+    if (item.cookedWeight) return openFood(batchFood(item), { meal: addMeal });
+    if (pickMode) return toast("Weigh this batch after cooking first.");
+    closeSheet("#addSheet");
+    return openBatch(item.id);
+  }
+  openFood(item, { meal: addMeal });
 });
 
 // ---------- Barcode tab ----------
@@ -551,9 +584,14 @@ function openFood(food, { grams, meal, entryId } = {}) {
   $("#foodName").textContent = food.name;
   $("#foodSub").textContent = [food.brand, food.source].filter(Boolean).join(" · ");
   $("#unit").innerHTML = (food.servings || []).map((s, i) => `<option value="${i}">${esc(s.label)}</option>`).join("") + `<option value="g">g / ml</option>`;
+  const weighOnPlate = food.source === "Batch" || food.source === "Cooked";
   if (grams != null) {
     $("#unit").value = "g";
     $("#amount").value = r1(grams);
+  } else if (weighOnPlate) {
+    $("#unit").value = "g";
+    $("#amount").value = "";
+    setTimeout(() => $("#amount").focus(), 60);
   } else if (s0) {
     $("#unit").value = "0";
     $("#amount").value = 1;
@@ -564,8 +602,8 @@ function openFood(food, { grams, meal, entryId } = {}) {
   fillMealSelect($("#foodMeal"), detail.meal);
   $("#deleteEntry").hidden = !entryId;
   $("#foodMeal").hidden = pickMode;
-  $("#logFood").textContent = pickMode ? "Add to meal" : entryId ? "Save" : "Add to diary";
-  $("#favBtn").hidden = food.source === "My meal";
+  $("#logFood").textContent = pickMode ? `Add to ${pickTarget()}` : entryId ? "Save" : "Add to diary";
+  $("#favBtn").hidden = ["My meal", "Batch", "Cooked"].includes(food.source); // these have their own lists
   updateFavBtn();
   renderFoodNutrients();
   openSheet("#foodSheet");
@@ -629,7 +667,7 @@ $("#unit").addEventListener("change", (e) => {
 });
 
 function remember(food) {
-  if (food.source === "AI estimate") return;
+  if (food.source === "AI estimate" || food.source === "Batch") return; // these go stale; they have their own lists
   S.recents = [food, ...S.recents.filter((f) => f.id !== food.id)].slice(0, 40);
 }
 function addEntry(food, grams, meal) {
@@ -644,7 +682,7 @@ $("#logFood").addEventListener("click", () => {
     remember(detail.food);
     save();
     closeSheet("#foodSheet");
-    closeSheet("#addSheet"); // reopens the meal editor
+    closeSheet("#addSheet"); // reopens the meal or batch editor
     toast(`Added ${detail.food.name}`);
     return;
   }
@@ -655,7 +693,8 @@ $("#logFood").addEventListener("click", () => {
     toast("Saved");
   } else {
     addEntry(detail.food, g, meal);
-    toast(`Added to ${meal}`);
+    const b = detail.food.batchId && S.batches.find((x) => x.id === detail.food.batchId);
+    toast(b ? `Added to ${meal} · ${r0(batchLeft(b))} g of batch left` : `Added to ${meal}`);
     closeSheet("#addSheet");
   }
   save();
@@ -751,6 +790,7 @@ function recipeFood(r) {
 let draft = null;
 function openRecipe(id, items = []) {
   const r = id && S.recipes.find((x) => x.id === id);
+  editing = "recipe";
   draft = r ? structuredClone(r) : { id: uid(), name: "", items: structuredClone(items) };
   $("#deleteRecipe").hidden = !r;
   showRecipe();
@@ -761,8 +801,10 @@ function showRecipe() {
   renderDraft();
   openSheet("#recipeSheet");
 }
+// The ingredient list is shared by the premade meal editor (#rItems) and the batch editor (#bItems).
+const draftPrefix = () => (editing === "batch" ? "b" : "r");
 function renderDraft() {
-  $("#rItems").innerHTML = draft.items.length ? draft.items.map((x, i) => {
+  $(`#${draftPrefix()}Items`).innerHTML = draft.items.length ? draft.items.map((x, i) => {
     const n = scale(x.food, x.grams);
     return `<li class="ai-item r-item">
       <div class="nm">${esc(x.food.name)}<small data-r-mac="${i}">${r0(n.kcal)} kcal &middot; ${macroLine(n)}</small></div>
@@ -773,24 +815,29 @@ function renderDraft() {
 }
 function renderDraftTotal() {
   const t = total(draft.items);
-  $("#rTotal").innerHTML = `<span>Total</span><span>${r0(t.kcal)} kcal &middot; ${r1(t.protein)}P ${r1(t.carbs)}C ${r1(t.fat)}F</span>`;
+  const raw = draft.items.reduce((a, x) => a + x.grams, 0);
+  const label = editing === "batch" ? `Raw total &middot; ${r0(raw)} g` : "Total";
+  $(`#${draftPrefix()}Total`).innerHTML = `<span>${label}</span><span>${r0(t.kcal)} kcal &middot; ${r1(t.protein)}P ${r1(t.carbs)}C ${r1(t.fat)}F</span>`;
+  if (editing === "batch") renderBatchCooked();
 }
 $("#rName").addEventListener("input", (e) => (draft.name = e.target.value));
-$("#rItems").addEventListener("input", (e) => {
-  const i = e.target.dataset.rG;
-  if (i == null) return;
-  const x = draft.items[+i];
-  x.grams = parseFloat(e.target.value) || 0;
-  const n = scale(x.food, x.grams);
-  $(`[data-r-mac="${i}"]`).innerHTML = `${r0(n.kcal)} kcal &middot; ${macroLine(n)}`;
-  renderDraftTotal();
-});
-$("#rItems").addEventListener("click", (e) => {
-  const d = e.target.closest("[data-r-del]");
-  if (!d) return;
-  draft.items.splice(+d.dataset.rDel, 1);
-  renderDraft();
-});
+for (const list of [$("#rItems"), $("#bItems")]) {
+  list.addEventListener("input", (e) => {
+    const i = e.target.dataset.rG;
+    if (i == null) return;
+    const x = draft.items[+i];
+    x.grams = parseFloat(e.target.value) || 0;
+    const n = scale(x.food, x.grams);
+    list.querySelector(`[data-r-mac="${i}"]`).innerHTML = `${r0(n.kcal)} kcal &middot; ${macroLine(n)}`;
+    renderDraftTotal();
+  });
+  list.addEventListener("click", (e) => {
+    const d = e.target.closest("[data-r-del]");
+    if (!d) return;
+    draft.items.splice(+d.dataset.rDel, 1);
+    renderDraft();
+  });
+}
 $("#addIngredient").addEventListener("click", () => {
   closeSheet("#recipeSheet");
   openAdd("search", null, { pick: true });
@@ -812,6 +859,222 @@ $("#deleteRecipe").addEventListener("click", () => {
   save();
   closeSheet("#recipeSheet");
   toast("Meal deleted");
+});
+
+// ---------- Cooked batches ----------
+// Cooking changes weight (mostly water) but not nutrients, so each cooked gram of a batch carries
+// (sum of raw ingredients) / (cooked weight). What's left = cooked weight minus everything logged from it.
+const fx = (v) => "×" + v.toFixed(2);
+function batchEaten(id) {
+  let g = 0;
+  for (const d in S.log) for (const e of S.log[d]) if (e.food.batchId === id) g += e.grams;
+  return g;
+}
+const batchLeft = (b) => Math.max(0, (b.cookedWeight || 0) - batchEaten(b.id));
+function batchFood(b) {
+  const left = batchLeft(b);
+  return {
+    id: "batch:" + b.id, batchId: b.id, name: b.name, source: "Batch",
+    brand: `${r0(left)} g left of ${r0(b.cookedWeight)} g cooked`,
+    per100: Object.fromEntries(Object.entries(total(b.items)).map(([k, v]) => [k, (v * 100) / b.cookedWeight])),
+    servings: left > 0 ? [{ label: `all that's left (${r0(left)} g)`, grams: left }] : [],
+  };
+}
+// A batch teaches the Cooked foods library only when it is (almost) one food; a little oil or salt is fine.
+function mainIngredient(b) {
+  const raw = b.items.reduce((a, x) => a + x.grams, 0);
+  if (!raw) return null;
+  const main = b.items.reduce((m, x) => (x.grams > m.grams ? x : m));
+  if (["Cooked", "Batch", "My meal"].includes(main.food.source)) return null;
+  return main.grams / raw >= 0.9 ? main : null;
+}
+const tareOf = (id) => S.containers.find((c) => c.id === id)?.tare || 0;
+
+function openBatch(id) {
+  const b = id && S.batches.find((x) => x.id === id);
+  editing = "batch";
+  draft = b ? structuredClone(b) : { id: uid(), name: "", items: [], reading: null, containerId: "", cookedWeight: 0, finished: false, at: Date.now() };
+  $("#bDelete").hidden = !b;
+  $("#bFinish").hidden = !b || !b.cookedWeight;
+  $("#bFinish").textContent = draft.finished ? "Reopen" : "Mark finished";
+  showBatch();
+  if (!b) setTimeout(() => $("#bName").focus(), 50);
+}
+function showBatch() {
+  $("#bName").value = draft.name;
+  $("#bReading").value = draft.reading ?? "";
+  $("#bContainer").innerHTML = `<option value="">Nothing (scale zeroed)</option>` +
+    S.containers.map((c) => `<option value="${c.id}">${esc(c.name)} (${r1(c.tare)} g)</option>`).join("");
+  $("#bContainer").value = S.containers.some((c) => c.id === draft.containerId) ? draft.containerId : "";
+  renderDraft();
+  openSheet("#batchSheet");
+}
+function batchCookedWeight() {
+  const reading = parseFloat($("#bReading").value);
+  return reading > 0 ? Math.max(0, reading - tareOf($("#bContainer").value)) : 0;
+}
+function renderBatchCooked() {
+  const cooked = batchCookedWeight();
+  const raw = draft.items.reduce((a, x) => a + x.grams, 0);
+  if (!cooked) {
+    $("#bCooked").innerHTML = `Cooked weight: <b>not weighed yet</b>`;
+    $("#bYieldNote").textContent = "You can save now and add the cooked weight after cooking.";
+    return;
+  }
+  const kcal = total(draft.items).kcal;
+  $("#bCooked").innerHTML = `Cooked weight: <b>${r0(cooked)} g</b>` +
+    (raw ? ` &middot; ${fx(cooked / raw)} the raw weight &middot; ${r0((kcal * 100) / cooked)} kcal per 100 g` : "");
+  const main = mainIngredient(draft);
+  $("#bYieldNote").textContent = main
+    ? `Saving adds this cook to "${main.food.name} (cooked)" in Cooked foods.`
+    : draft.items.length > 1 ? "Mixed batches aren't added to Cooked foods. Only batches that are mostly one food are." : "";
+}
+$("#bName").addEventListener("input", (e) => (draft.name = e.target.value));
+$("#bReading").addEventListener("input", (e) => { draft.reading = parseFloat(e.target.value) || null; renderBatchCooked(); });
+$("#bContainer").addEventListener("change", (e) => { draft.containerId = e.target.value; renderBatchCooked(); });
+$("#bAddIngredient").addEventListener("click", () => {
+  closeSheet("#batchSheet");
+  openAdd("search", null, { pick: true });
+});
+$("#bSave").addEventListener("click", () => {
+  draft.name = $("#bName").value.trim();
+  draft.items = draft.items.filter((x) => x.grams > 0);
+  if (!draft.name) { $("#bName").focus(); return toast("Give the batch a name."); }
+  if (!draft.items.length) return toast("Add the raw ingredients first.");
+  draft.cookedWeight = batchCookedWeight();
+  const i = S.batches.findIndex((x) => x.id === draft.id);
+  if (i >= 0) S.batches[i] = draft;
+  else S.batches.unshift(draft);
+  const y = recordYield(draft);
+  save();
+  closeSheet("#batchSheet");
+  toast(!draft.cookedWeight ? "Batch saved. Add the cooked weight after cooking." : y ? `Saved. ${y.food.name} average updated` : "Batch saved");
+});
+$("#bFinish").addEventListener("click", () => {
+  const b = S.batches.find((x) => x.id === draft.id);
+  if (b) b.finished = !b.finished;
+  save();
+  closeSheet("#batchSheet");
+  toast(b?.finished ? "Batch marked finished" : "Batch reopened");
+});
+$("#bDelete").addEventListener("click", () => {
+  S.batches = S.batches.filter((x) => x.id !== draft.id);
+  removeBatchSamples(draft.id); // diary entries already logged keep their numbers
+  save();
+  closeSheet("#batchSheet");
+  toast("Batch deleted");
+});
+
+// ---------- Cooked foods (yield library) ----------
+// Each cook of a food records raw -> cooked weight. The average factor of the last 6 cooks turns a cooked
+// weight on your plate back into raw nutrition: per 100 g cooked = per 100 g raw / factor.
+function removeBatchSamples(batchId) {
+  for (const k of Object.keys(S.yields)) {
+    const y = S.yields[k];
+    y.samples = y.samples.filter((s) => s.batchId !== batchId);
+    if (!y.samples.length) delete S.yields[k];
+  }
+}
+function recordYield(b) {
+  removeBatchSamples(b.id); // re-saving a batch replaces its earlier sample
+  const main = mainIngredient(b);
+  if (!main || !(b.cookedWeight > 0)) return null;
+  const raw = b.items.reduce((a, x) => a + x.grams, 0);
+  const y = (S.yields[main.food.id] ||= { key: main.food.id, food: main.food, samples: [] });
+  y.food = main.food;
+  y.samples.push({ raw, cooked: b.cookedWeight, at: b.at || Date.now(), batchId: b.id });
+  return y;
+}
+function yieldStats(y) {
+  const f = y.samples.slice(-6).map((s) => s.cooked / s.raw);
+  const n = f.length;
+  const avg = f.reduce((a, b) => a + b, 0) / n;
+  const sd = n > 1 ? Math.sqrt(f.reduce((a, b) => a + (b - avg) ** 2, 0) / (n - 1)) : null;
+  return { avg, sd, n };
+}
+function cookedFood(y) {
+  const { avg, sd, n } = yieldStats(y);
+  return {
+    id: "cooked:" + y.key, yieldKey: y.key, name: `${y.food.name} (cooked)`, source: "Cooked",
+    brand: `${fx(avg)} raw weight · ${n} cook${n === 1 ? "" : "s"}${sd != null ? ` · ±${sd.toFixed(2)}` : ""}`,
+    per100: Object.fromEntries(Object.entries(y.food.per100).map(([k, v]) => [k, v / avg])),
+    servings: [],
+  };
+}
+let yKey = null;
+function openYield(key) {
+  yKey = key;
+  renderYield();
+  openSheet("#yieldSheet");
+}
+function renderYield() {
+  const y = S.yields[yKey];
+  if (!y) return closeSheet("#yieldSheet");
+  const { avg, sd, n } = yieldStats(y);
+  $("#yName").textContent = `${y.food.name} (cooked)`;
+  $("#ySub").textContent = `Cooked weight is ${fx(avg)} the raw weight on average, from your last ${n} cook${n === 1 ? "" : "s"}` +
+    (sd != null ? ` (varies by ±${sd.toFixed(2)})` : "");
+  const counted = y.samples.length - 6;
+  $("#ySamples").innerHTML = y.samples.map((s, i) => `<li class="ai-item r-item${i < counted ? " old" : ""}">
+      <div class="nm">${new Date(s.at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+        <small>${r0(s.raw)} g raw &rarr; ${r0(s.cooked)} g cooked${s.batchId ? " &middot; from a batch" : ""}${i < counted ? " &middot; not in average" : ""}</small></div>
+      <span class="factor">${fx(s.cooked / s.raw)}</span>
+      <button class="icon-btn" data-y-del="${i}" aria-label="Remove this cook">&#10005;</button></li>`).reverse().join("");
+}
+$("#ySamples").addEventListener("click", (e) => {
+  const d = e.target.closest("[data-y-del]");
+  if (!d) return;
+  const y = S.yields[yKey];
+  y.samples.splice(+d.dataset.yDel, 1);
+  if (!y.samples.length) { delete S.yields[yKey]; toast("Removed from cooked foods"); }
+  save();
+  renderYield();
+  if ($("#addSheet").open) renderList();
+});
+$("#yAdd").addEventListener("click", () => {
+  const raw = parseFloat($("#yRaw").value), cooked = parseFloat($("#yCooked").value);
+  if (!(raw > 0 && cooked > 0)) return toast("Enter both the raw and cooked weight.");
+  S.yields[yKey].samples.push({ raw, cooked, at: Date.now() });
+  $("#yRaw").value = $("#yCooked").value = "";
+  save();
+  renderYield();
+  if ($("#addSheet").open) renderList();
+});
+$("#yDelete").addEventListener("click", () => {
+  delete S.yields[yKey];
+  save();
+  closeSheet("#yieldSheet");
+  if ($("#addSheet").open) renderList();
+  toast("Removed from cooked foods");
+});
+$("#yLog").addEventListener("click", () => {
+  const y = S.yields[yKey];
+  closeSheet("#yieldSheet");
+  if (y) openFood(cookedFood(y), { meal: addMeal });
+});
+
+// ---------- Containers ----------
+function renderContainers() {
+  $("#containerList").innerHTML = S.containers.length
+    ? S.containers.map((c) => `<li class="ai-item r-item"><div class="nm">${esc(c.name)}</div><span class="factor">${r1(c.tare)} g</span>
+        <button type="button" class="icon-btn" data-ct-del="${c.id}" aria-label="Delete ${esc(c.name)}">&#10005;</button></li>`).join("")
+    : `<li class="status">No containers saved yet.</li>`;
+}
+$("#addContainer").addEventListener("click", () => {
+  const name = $("#ctName").value.trim(), tare = parseFloat($("#ctTare").value);
+  if (!name || !(tare > 0)) return toast("Enter a name and the empty weight.");
+  S.containers.push({ id: uid(), name, tare });
+  $("#ctName").value = $("#ctTare").value = "";
+  save();
+  renderContainers();
+  toast(`Saved ${name}`);
+});
+$("#containerList").addEventListener("click", (e) => {
+  const d = e.target.closest("[data-ct-del]");
+  if (!d) return;
+  S.containers = S.containers.filter((c) => c.id !== d.dataset.ctDel);
+  save();
+  renderContainers();
 });
 
 // ---------- Custom food ----------
@@ -935,7 +1198,7 @@ function showAi(data) {
     ${data.notes ? `<div class="ai-notes">${esc(data.notes)}</div>` : ""}
     <div class="ai-actions">
       <label class="check" ${pickMode ? "hidden" : ""}><input type="checkbox" id="aiCombine"> Log as one entry named "${esc(aiMealName)}"</label>
-      <button class="btn primary wide" id="aiLog">${pickMode ? "Add to meal" : `Add to ${esc(addMeal)}`}</button>
+      <button class="btn primary wide" id="aiLog">${pickMode ? `Add to ${pickTarget()}` : `Add to ${esc(addMeal)}`}</button>
     </div></div>`;
   renderAiItems();
 }
@@ -975,7 +1238,7 @@ $("#aiResult").addEventListener("click", (e) => {
   if (pickMode) {
     for (const x of chosen) draft.items.push({ food: x.food, grams: x.grams });
     resetAi();
-    closeSheet("#addSheet"); // reopens the meal editor
+    closeSheet("#addSheet"); // reopens the meal or batch editor
     return;
   }
   if ($("#aiCombine").checked) {
@@ -1068,6 +1331,7 @@ function openSettings() {
   $("#tKcal").value = T.kcal;
   split = splitFromTargets(T);
   renderSplit();
+  renderContainers();
   $("#sUsda").value = S.settings.usdaKey;
   openSheet("#settingsSheet");
 }
@@ -1091,7 +1355,11 @@ $("#settingsForm").addEventListener("submit", (e) => {
   toast("Settings saved");
 });
 $("#exportData").addEventListener("click", () => {
-  const data = { log: S.log, recents: S.recents, favorites: S.favorites, recipes: S.recipes, targets: S.settings.targets, exported: new Date().toISOString() };
+  const data = {
+    log: S.log, recents: S.recents, favorites: S.favorites, recipes: S.recipes,
+    batches: S.batches, containers: S.containers, yields: S.yields,
+    targets: S.settings.targets, exported: new Date().toISOString(),
+  };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
   a.download = `forkcast-${iso()}.json`;
@@ -1109,6 +1377,9 @@ $("#importData").addEventListener("change", async (e) => {
     if (Array.isArray(d.recents)) S.recents = d.recents;
     if (Array.isArray(d.favorites)) S.favorites = d.favorites;
     if (Array.isArray(d.recipes)) S.recipes = d.recipes;
+    if (Array.isArray(d.batches)) S.batches = d.batches;
+    if (Array.isArray(d.containers)) S.containers = d.containers;
+    if (d.yields && typeof d.yields === "object") S.yields = d.yields;
     if (d.targets) S.settings.targets = { ...S.settings.targets, ...d.targets };
     save();
     render();

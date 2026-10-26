@@ -246,6 +246,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .grid-form h3 { margin: 8px 0 -4px; font: 700 15px/1.2 var(--display); }
 .span2 { grid-column: 1 / -1; }
 
+.sub-head { margin: 6px 0 -4px; font: 700 15px/1.2 var(--display); }
+.grow { flex: 1; min-width: 0; }
+.cooked-line { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.factor { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.r-item.old { opacity: .55; }
 .split { display: flex; flex-direction: column; gap: 10px; }
 .split-bar { display: flex; height: 10px; border-radius: 99px; overflow: hidden; background: var(--surface-2); }
 .split-bar i { display: block; height: 100%; transition: width .15s; }

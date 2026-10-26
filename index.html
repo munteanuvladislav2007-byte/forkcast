@@ -78,6 +78,7 @@
       <button type="button" data-list-tab="recents">Recent</button>
       <button type="button" data-list-tab="favorites">Favorites</button>
       <button type="button" data-list-tab="meals">My meals</button>
+      <button type="button" data-list-tab="cooking">Cooking</button>
       <button type="button" data-list-tab="history">History</button>
     </div>
     <div id="searchStatus" class="status"></div>
@@ -158,6 +159,59 @@
   </div>
 </dialog>
 
+<!-- Cooked batch editor -->
+<dialog class="sheet" id="batchSheet" aria-labelledby="batchTitle">
+  <div class="sheet-head">
+    <h2 id="batchTitle">Cooked batch</h2>
+    <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+  </div>
+  <div class="tab-panel">
+    <label class="field">Batch name<input id="bName" placeholder="e.g. Chicken mince, Monday" autocomplete="off"></label>
+    <h3 class="sub-head">1. Raw ingredients</h3>
+    <p class="hint">Weigh everything before cooking. Scan or search the package so its nutrition is saved.</p>
+    <ul class="r-items" id="bItems"></ul>
+    <div class="ai-total" id="bTotal"></div>
+    <button class="btn ghost wide" id="bAddIngredient">+ Add raw ingredient</button>
+    <h3 class="sub-head">2. After cooking</h3>
+    <div class="row">
+      <label class="field grow">Scale reading (g)<input id="bReading" type="number" inputmode="decimal" step="any" min="0" placeholder="e.g. 792"></label>
+      <label class="field grow">Weighed in<select id="bContainer"></select></label>
+    </div>
+    <div class="cooked-line" id="bCooked"></div>
+    <p class="hint" id="bYieldNote"></p>
+    <div class="row end">
+      <button class="btn danger" id="bDelete" hidden>Delete</button>
+      <button class="btn ghost" id="bFinish" hidden>Mark finished</button>
+      <button class="btn primary" id="bSave">Save batch</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Cooked food (yield library) -->
+<dialog class="sheet" id="yieldSheet" aria-labelledby="yName">
+  <div class="sheet-head">
+    <div class="food-title">
+      <h2 id="yName">Cooked food</h2>
+      <div class="food-sub" id="ySub"></div>
+    </div>
+    <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
+  </div>
+  <div class="tab-panel">
+    <ul class="r-items" id="ySamples"></ul>
+    <h3 class="sub-head">Add a cook by hand</h3>
+    <div class="row">
+      <input id="yRaw" type="number" inputmode="decimal" step="any" min="0" placeholder="Raw g" aria-label="Raw weight in grams">
+      <input id="yCooked" type="number" inputmode="decimal" step="any" min="0" placeholder="Cooked g" aria-label="Cooked weight in grams">
+      <button class="btn" id="yAdd">Add</button>
+    </div>
+    <p class="hint">The average uses your last 6 cooks. Remove any that look wrong.</p>
+    <div class="row end">
+      <button class="btn danger" id="yDelete">Remove</button>
+      <button class="btn primary" id="yLog">Log cooked weight</button>
+    </div>
+  </div>
+</dialog>
+
 <!-- Custom food sheet -->
 <dialog class="sheet" id="customSheet" aria-labelledby="customTitle">
   <div class="sheet-head">
@@ -216,6 +270,15 @@
       </div>
       <p class="hint">Percentages always add up to 100. Change one and the other two adjust. Protein and carbs have 4 kcal per gram, fat has 9.</p>
     </div>
+
+    <h3 class="span2">Containers</h3>
+    <ul class="span2 r-items" id="containerList"></ul>
+    <div class="span2 row">
+      <input id="ctName" placeholder="Name, e.g. Glass box" aria-label="Container name" autocomplete="off">
+      <input id="ctTare" type="number" inputmode="decimal" step="any" min="0" placeholder="Empty weight (g)" aria-label="Empty weight in grams">
+      <button type="button" class="btn" id="addContainer">Add</button>
+    </div>
+    <p class="hint span2">Weigh each empty pot or box once. When you weigh a cooked batch in it, its weight is subtracted.</p>
 
     <h3 class="span2">Food search</h3>
     <label class="field span2">USDA FoodData Central API key
