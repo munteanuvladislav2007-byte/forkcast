@@ -31,7 +31,12 @@ const DEFAULTS = {
   containers: [], // { id, name, tare }
   yields: {}, // cooked foods, keyed by raw food id: { key, food (raw), samples: [{ raw, cooked, at, batchId? }] }
   customFoods: [], // foods typed in from a label; ones with a barcode are found by scanning it
+  collapsed: {}, // meal sections folded shut on the diary, e.g. { Lunch: true }
+  combineClaude: false, // last choice for "log a pasted Claude meal as one entry"
 };
+// Combined entries (a pasted Claude meal logged as one, or a premade meal) keep their parts in food.parts;
+// these are the ones currently unfolded on the diary.
+const expanded = new Set();
 let S = loadState();
 // Custom foods used to live only in Recent/Favorites; keep any found there permanently.
 for (const f of [...S.recents, ...S.favorites]) {
@@ -87,6 +92,11 @@ function total(entries) {
   }
   return o;
 }
+// The parts of a combined entry, scaled to how much of it was logged (half a meal = half of each part).
+function partsFor(e) {
+  const whole = e.food.parts.reduce((a, p) => a + p.grams, 0) || 1;
+  return e.food.parts.map((p) => ({ food: p.food, grams: (p.grams * e.grams) / whole }));
+}
 function defaultMeal() {
   const h = new Date().getHours();
   return h < 11 ? "Breakfast" : h < 15 ? "Lunch" : h < 21 ? "Dinner" : "Snacks";
@@ -129,18 +139,29 @@ function render() {
     const mt = total(list);
     const unsorted = meal === "Unsorted";
     if (unsorted && !list.length) return "";
-    return `<section class="meal${unsorted ? " unsorted" : ""}" data-meal="${meal}">
-      <div class="meal-head"><h3>${meal}</h3><span class="kcal">${list.length ? r0(mt.kcal) + " kcal" : ""}</span>
+    const shut = !!S.collapsed[meal] && list.length > 0;
+    const count = shut ? `${list.length} item${list.length === 1 ? "" : "s"} &middot; ` : "";
+    return `<section class="meal${unsorted ? " unsorted" : ""}${shut ? " shut" : ""}" data-meal="${meal}">
+      <div class="meal-head"><h3><button class="collapse" data-collapse="${meal}" aria-expanded="${!shut}" ${list.length ? "" : "disabled"}>
+          <svg class="chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>${meal}</button></h3>
+        <span class="kcal">${list.length ? count + r0(mt.kcal) + " kcal" : ""}</span>
         ${list.length ? `<button class="icon-btn save-meal" data-save-meal="${meal}" aria-label="Save ${meal} as a premade meal" title="Save as a premade meal"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 4h10v16l-5-3.5L7 20z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>` : ""}
         <button class="add-btn" data-add="${meal}">+ Add</button></div>
-      ${unsorted ? `<p class="unsorted-hint">Drag these into a meal with the handle, or leave them here.</p>` : ""}
-      ${list.length ? `<ul class="entries">${list.map((e) => {
+      ${unsorted && !shut ? `<p class="unsorted-hint">Drag these into a meal with the handle, or leave them here.</p>` : ""}
+      ${list.length && !shut ? `<ul class="entries">${list.map((e) => {
         const n = scale(e.food, e.grams);
         const tag = SOURCE_TAG[e.food.source] ? `<span class="src-ai">${SOURCE_TAG[e.food.source]}</span>` : "";
+        const parts = e.food.parts?.length ? e.food.parts : null;
+        const open = parts && expanded.has(e.id);
         return `<li class="entry" data-edit="${e.id}">
           <button class="grip" aria-label="Drag ${esc(e.food.name)} to another meal"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button>
           <div class="entry-main"><div class="entry-name">${esc(e.food.name)}${tag}</div>
-          <div class="entry-sub">${fmtGrams(e.grams)} &middot; ${macroLine(n)}</div></div><div class="entry-kcal">${r0(n.kcal)}</div></li>`;
+          <div class="entry-sub">${fmtGrams(e.grams)}${parts ? ` &middot; ${parts.length} parts` : ""} &middot; ${macroLine(n)}</div></div><div class="entry-kcal">${r0(n.kcal)}</div>
+          ${parts ? `<button class="expand" data-expand="${e.id}" aria-expanded="${!!open}" aria-label="${open ? "Hide" : "Show"} what's in ${esc(e.food.name)}"><svg class="chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` : ""}</li>
+          ${open ? `<li class="parts"><ul>${partsFor(e).map((p) => {
+            const pn = scale(p.food, p.grams);
+            return `<li><span class="part-name">${esc(p.food.name)}</span><span class="part-g">${fmtGrams(p.grams)}</span><span class="part-k">${r0(pn.kcal)} kcal</span></li>`;
+          }).join("")}</ul></li>` : ""}`;
       }).join("")}</ul>` : ""}
     </section>`;
   }).join("") + (entries.length ? "" : `<p class="empty-day">Nothing logged for ${esc(dayLabel(day).toLowerCase())} yet. Tap Add food, scan a barcode, or paste a meal from Claude.</p>`);
@@ -612,6 +633,7 @@ function openFood(food, { grams, meal, entryId } = {}) {
   }
   fillMealSelect($("#foodMeal"), detail.meal);
   $("#deleteEntry").hidden = !entryId;
+  $("#splitEntry").hidden = !(entryId && food.parts?.length);
   $("#foodMeal").hidden = pickMode;
   $("#logFood").textContent = pickMode ? `Add to ${pickTarget()}` : entryId ? "Save" : "Add to diary";
   $("#favBtn").hidden = ["My meal", "Batch", "Cooked"].includes(food.source); // these have their own lists
@@ -713,6 +735,19 @@ $("#logFood").addEventListener("click", () => {
   closeSheet("#foodSheet");
   render();
 });
+// Turn a combined entry back into its separate foods, in the same meal and at the same amounts.
+$("#splitEntry").addEventListener("click", () => {
+  const list = S.log[day] || [];
+  const i = list.findIndex((x) => x.id === detail.entryId);
+  if (i < 0) return;
+  const en = list[i];
+  const pieces = partsFor(en).map((p) => ({ id: uid(), meal: en.meal, food: p.food, grams: p.grams, at: en.at }));
+  list.splice(i, 1, ...pieces);
+  save();
+  closeSheet("#foodSheet");
+  render();
+  toast(`Split into ${pieces.length} items`);
+});
 $("#deleteEntry").addEventListener("click", () => {
   S.log[day] = (S.log[day] || []).filter((x) => x.id !== detail.entryId);
   save();
@@ -722,6 +757,21 @@ $("#deleteEntry").addEventListener("click", () => {
 });
 $("#meals").addEventListener("click", (e) => {
   if (e.target.closest(".grip")) return;
+  const col = e.target.closest("[data-collapse]");
+  if (col) {
+    const m = col.dataset.collapse;
+    if (S.collapsed[m]) delete S.collapsed[m];
+    else S.collapsed[m] = true;
+    save();
+    return render();
+  }
+  const ex = e.target.closest("[data-expand]");
+  if (ex) {
+    const id = ex.dataset.expand;
+    expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+    return render();
+  }
+  if (e.target.closest(".parts")) return;
   const add = e.target.closest("[data-add]");
   if (add) return openAdd("search", add.dataset.add);
   const sm = e.target.closest("[data-save-meal]");
@@ -797,6 +847,7 @@ function recipeFood(r) {
     id: "meal:" + r.id, name: r.name, brand: r.items.map((x) => x.food.name).join(", "), source: "My meal",
     per100: Object.fromEntries(Object.entries(total(r.items)).map(([key, v]) => [key, v * k])),
     servings: [{ label: `1 meal (${r1(g)} g)`, grams: g }],
+    parts: r.items.map((x) => ({ food: x.food, grams: x.grams })),
   };
 }
 let draft = null;
@@ -1264,7 +1315,8 @@ function showAi(data) {
     <div class="ai-total" id="aiTotal"></div>
     ${data.notes ? `<div class="ai-notes">${esc(data.notes)}</div>` : ""}
     <div class="ai-actions">
-      <label class="check" ${pickMode ? "hidden" : ""}><input type="checkbox" id="aiCombine"> Log as one entry named "${esc(aiMealName)}"</label>
+      <label class="check combine" ${pickMode ? "hidden" : ""}><input type="checkbox" id="aiCombine" ${S.combineClaude ? "checked" : ""}>
+        <span><b>Combine into one entry</b><small>Shows as "${esc(aiMealName)}" on your diary. Tap the arrow there to see the parts.</small></span></label>
       <button class="btn primary wide" id="aiLog">${pickMode ? `Add to ${pickTarget()}` : `Add to ${esc(addMeal)}`}</button>
     </div></div>`;
   renderAiItems();
@@ -1295,6 +1347,7 @@ $("#aiResult").addEventListener("input", (e) => {
   }
 });
 $("#aiResult").addEventListener("change", (e) => {
+  if (e.target.id === "aiCombine") { S.combineClaude = e.target.checked; save(); return; }
   const oi = e.target.dataset.aiOn;
   if (oi != null) { aiItems[+oi].on = e.target.checked; renderAiTotal(); }
 });
@@ -1316,6 +1369,7 @@ $("#aiResult").addEventListener("click", (e) => {
       id: "ai:" + uid(), name: aiMealName, brand: chosen.map((x) => x.food.name).join(", "), source: "AI estimate",
       per100: Object.fromEntries(Object.entries(t).map(([kk, v]) => [kk, v * k])),
       servings: [{ label: `whole meal (${r1(g)} g)`, grams: g }],
+      parts: chosen.map((x) => ({ food: x.food, grams: x.grams })),
     };
     addEntry(food, g, addMeal);
   } else {

@@ -102,6 +102,26 @@ img { max-width: 100%; }
 .dot::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 3px; vertical-align: 1px; background: currentColor; }
 .dot.p::before { background: var(--protein); } .dot.c::before { background: var(--carbs); } .dot.f::before { background: var(--fat); }
 .src-ai { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin-left: 6px; }
+.meal-head h3 { min-width: 0; }
+.collapse {
+  display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 4px 6px 4px 0;
+  font: inherit; color: inherit; cursor: pointer; border-radius: 8px;
+}
+.collapse:disabled { cursor: default; }
+.collapse:disabled .chev { visibility: hidden; }
+.chev { color: var(--muted); transition: transform .15s; transform: rotate(90deg); flex: none; }
+.collapse[aria-expanded="false"] .chev, .expand[aria-expanded="false"] .chev { transform: none; }
+.meal.shut .meal-head { padding-block: 10px; }
+.expand { flex: none; display: grid; place-items: center; width: 30px; height: 30px; margin-right: -6px; border: 0; background: none; border-radius: 8px; cursor: pointer; }
+.expand:hover, .collapse:not(:disabled):hover { background: var(--surface-2); }
+.parts { list-style: none; padding: 0 14px 10px 46px; }
+.parts ul { list-style: none; margin: 0; padding: 0 0 0 10px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.parts li { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.parts .part-name { color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check.combine { align-items: flex-start; }
+.check.combine span { display: flex; flex-direction: column; gap: 2px; }
+.check.combine small { color: var(--muted); font-size: 12.5px; }
+@media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
 .meal.unsorted { border-style: dashed; }
 .unsorted-hint { margin: -6px 14px 8px; font-size: 12.5px; color: var(--muted); }
 .meal.drop { outline: 2px solid var(--accent); outline-offset: -1px; background: var(--surface-2); }
