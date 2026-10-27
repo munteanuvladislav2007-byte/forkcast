@@ -125,6 +125,7 @@
       <div class="food-sub" id="foodSub"></div>
     </div>
     <div class="head-btns">
+      <button class="icon-btn" id="editCustom" aria-label="Edit this food" title="Edit this food" hidden>&#9998;</button>
       <button class="icon-btn star" id="favBtn" aria-pressed="false" aria-label="Add to favorites">&#9734;</button>
       <button class="icon-btn" data-close aria-label="Close">&#10005;</button>
     </div>
@@ -228,8 +229,12 @@
     <label class="field">Fat (g)<input id="cFat" type="number" inputmode="decimal" step="any" value="0"></label>
     <label class="field">Fiber (g)<input id="cFiber" type="number" inputmode="decimal" step="any" value="0"></label>
     <input id="cCode" type="hidden">
-    <p class="hint span2">Enter the values for one serving, as printed on the label.</p>
-    <button class="btn primary wide span2">Save food</button>
+    <input id="cId" type="hidden">
+    <p class="hint span2" id="cHint">Enter the values for one serving, as printed on the label.</p>
+    <div class="row end span2">
+      <button type="button" class="btn danger" id="cDelete" hidden>Delete food</button>
+      <button class="btn primary" id="cSave">Save food</button>
+    </div>
   </form>
 </dialog>
 

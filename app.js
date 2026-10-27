@@ -30,8 +30,13 @@ const DEFAULTS = {
   batches: [], // cooked batches: { id, name, items (raw), reading, containerId, cookedWeight, finished, at }
   containers: [], // { id, name, tare }
   yields: {}, // cooked foods, keyed by raw food id: { key, food (raw), samples: [{ raw, cooked, at, batchId? }] }
+  customFoods: [], // foods typed in from a label; ones with a barcode are found by scanning it
 };
 let S = loadState();
+// Custom foods used to live only in Recent/Favorites; keep any found there permanently.
+for (const f of [...S.recents, ...S.favorites]) {
+  if (f.source === "Custom" && !S.customFoods.some((c) => c.id === f.id)) S.customFoods.push(f);
+}
 
 function loadState() {
   try {
@@ -315,6 +320,10 @@ async function searchOFF(q) {
 async function lookupBarcode(raw) {
   const code = String(raw).replace(/\D/g, "");
   if (!code) return null;
+  // Your own saved foods come first, so a label you typed in once is found instantly (even offline).
+  const strip = (s) => String(s || "").replace(/^0+/, "");
+  const mine = S.customFoods.find((f) => f.code && strip(f.code) === strip(code));
+  if (mine) return mine;
   try {
     const r = await fetch(`${OFF}/api/v2/product/${code}.json?fields=${OFF_FIELDS}`);
     if (r.ok) {
@@ -429,7 +438,9 @@ $("#searchForm").addEventListener("submit", async (e) => {
     if (o[i]) branded.push(o[i]);
     if (ub[i]) branded.push(ub[i]);
   }
-  lists.results = [...generic, ...branded].slice(0, 50);
+  const ql = q.toLowerCase();
+  const mine = S.customFoods.filter((f) => `${f.name} ${f.brand || ""}`.toLowerCase().includes(ql));
+  lists.results = [...mine, ...generic, ...branded].slice(0, 60);
   const errs = [usda, off].filter((x) => x.status === "rejected").map((x) => x.reason.message);
   st.className = "status" + (errs.length && !lists.results.length ? " err" : "");
   st.textContent = lists.results.length ? "" : errs.length ? errs.join(" ") : `No foods found for "${q}". Try a simpler name, or create a custom food.`;
@@ -532,7 +543,7 @@ async function onCode(code) {
       openFood(food, { meal: addMeal });
     } else {
       scanStatus("");
-      $("#scanResult").innerHTML = `<div class="notfound"><div><b>Barcode ${esc(code)} isn't in Open Food Facts or USDA yet.</b><br>Add it from the nutrition label, or snap the meal for an AI estimate.</div>
+      $("#scanResult").innerHTML = `<div class="notfound"><div><b>Barcode ${esc(code)} isn't in Open Food Facts or USDA yet.</b><br>Type in the nutrition label once and scanning it will find your food from then on.</div>
         <div class="row"><button class="btn" data-nf="custom" data-code="${esc(code)}">Enter label values</button><button class="btn ghost" data-nf="retry">Scan again</button></div></div>`;
     }
   } finally {
@@ -604,6 +615,7 @@ function openFood(food, { grams, meal, entryId } = {}) {
   $("#foodMeal").hidden = pickMode;
   $("#logFood").textContent = pickMode ? `Add to ${pickTarget()}` : entryId ? "Save" : "Add to diary";
   $("#favBtn").hidden = ["My meal", "Batch", "Cooked"].includes(food.source); // these have their own lists
+  $("#editCustom").hidden = food.source !== "Custom" || pickMode;
   updateFavBtn();
   renderFoodNutrients();
   openSheet("#foodSheet");
@@ -1078,11 +1090,37 @@ $("#containerList").addEventListener("click", (e) => {
 });
 
 // ---------- Custom food ----------
-function openCustom(code = "") {
+// Custom foods are kept in S.customFoods for good; Recent/Favorites only hold copies.
+// `existing` opens the form to edit a saved food (its label values are shown per serving).
+function openCustom(code = "", existing = null) {
   $("#customForm").reset();
-  $("#cCode").value = code;
-  $("#cName").value = $("#q").value.trim();
+  $("#cId").value = existing?.id || "";
+  $("#cCode").value = existing ? existing.code || "" : code;
+  $("#customTitle").textContent = existing ? "Edit custom food" : "Custom food";
+  $("#cDelete").hidden = !existing;
+  const codeNow = $("#cCode").value;
+  $("#cHint").textContent = "Enter the values for one serving, as printed on the label." +
+    (codeNow ? ` Saved with barcode ${codeNow}, so scanning it finds this food.` : "");
+  if (existing) {
+    const sv = existing.servings[0]?.grams || 100;
+    const per = (k) => r1(((existing.per100[k] || 0) * sv) / 100);
+    $("#cName").value = existing.name;
+    $("#cBrand").value = existing.brand || "";
+    $("#cServing").value = r1(sv);
+    $("#cKcal").value = per("kcal"); $("#cProtein").value = per("protein"); $("#cCarbs").value = per("carbs");
+    $("#cFat").value = per("fat"); $("#cFiber").value = per("fiber");
+  } else {
+    $("#cName").value = $("#q").value.trim();
+  }
   openSheet("#customSheet");
+}
+// Replace every saved copy of a food (custom list, Recent, Favorites) and, for a fixed typo, the diary entries.
+function replaceFood(food) {
+  const swap = (arr) => arr.map((f) => (f.id === food.id ? food : f));
+  S.customFoods = swap(S.customFoods);
+  S.recents = swap(S.recents);
+  S.favorites = swap(S.favorites);
+  for (const d in S.log) for (const e of S.log[d]) if (e.food.id === food.id) e.food = food;
 }
 $("#newCustom").addEventListener("click", () => openCustom());
 $("#customForm").addEventListener("submit", (e) => {
@@ -1090,15 +1128,44 @@ $("#customForm").addEventListener("submit", (e) => {
   const sv = parseFloat($("#cServing").value) || 100;
   const f = (id) => (parseFloat($(id).value) || 0) * 100 / sv;
   const code = $("#cCode").value;
+  const editId = $("#cId").value;
+  const old = editId ? S.customFoods.find((x) => x.id === editId) : null;
   const food = {
-    id: "custom:" + (code || uid()), name: $("#cName").value.trim(), brand: $("#cBrand").value.trim(), source: "Custom",
-    per100: { kcal: f("#cKcal"), protein: f("#cProtein"), carbs: f("#cCarbs"), fat: f("#cFat"), fiber: f("#cFiber"), sugar: 0, sodium: 0 },
+    id: editId || "custom:" + (code || uid()), name: $("#cName").value.trim(), brand: $("#cBrand").value.trim(), source: "Custom",
+    per100: {
+      kcal: f("#cKcal"), protein: f("#cProtein"), carbs: f("#cCarbs"), fat: f("#cFat"), fiber: f("#cFiber"),
+      sugar: old?.per100?.sugar || 0, sodium: old?.per100?.sodium || 0,
+    },
     servings: [{ label: `1 serving (${r1(sv)} g)`, grams: sv }], code,
   };
+  if (S.customFoods.some((x) => x.id === food.id)) replaceFood(food);
+  else S.customFoods.unshift(food);
   remember(food);
   save();
   closeSheet("#customSheet");
-  openFood(food, { meal: addMeal });
+  if (old) {
+    render();
+    toast("Food updated");
+    if ($("#foodSheet").open) openFood(food, { meal: detail.meal, entryId: detail.entryId, grams: detail.entryId ? detail.grams : undefined });
+  } else {
+    toast(code ? "Saved. Scanning this barcode will find it." : "Food saved");
+    openFood(food, { meal: addMeal });
+  }
+});
+$("#cDelete").addEventListener("click", () => {
+  const id = $("#cId").value;
+  S.customFoods = S.customFoods.filter((f) => f.id !== id);
+  S.recents = S.recents.filter((f) => f.id !== id);
+  S.favorites = S.favorites.filter((f) => f.id !== id);
+  save(); // diary entries already logged keep their numbers
+  closeSheet("#customSheet");
+  closeSheet("#foodSheet");
+  if ($("#addSheet").open && !$("#q").value) renderList();
+  toast("Food deleted");
+});
+$("#editCustom").addEventListener("click", () => {
+  const saved = S.customFoods.find((f) => f.id === detail.food.id);
+  openCustom("", saved || detail.food);
 });
 
 // ---------- From Claude (pasted meal estimate) ----------
@@ -1357,7 +1424,7 @@ $("#settingsForm").addEventListener("submit", (e) => {
 $("#exportData").addEventListener("click", () => {
   const data = {
     log: S.log, recents: S.recents, favorites: S.favorites, recipes: S.recipes,
-    batches: S.batches, containers: S.containers, yields: S.yields,
+    batches: S.batches, containers: S.containers, yields: S.yields, customFoods: S.customFoods,
     targets: S.settings.targets, exported: new Date().toISOString(),
   };
   const a = document.createElement("a");
@@ -1380,6 +1447,7 @@ $("#importData").addEventListener("change", async (e) => {
     if (Array.isArray(d.batches)) S.batches = d.batches;
     if (Array.isArray(d.containers)) S.containers = d.containers;
     if (d.yields && typeof d.yields === "object") S.yields = d.yields;
+    if (Array.isArray(d.customFoods)) S.customFoods = d.customFoods;
     if (d.targets) S.settings.targets = { ...S.settings.targets, ...d.targets };
     save();
     render();
