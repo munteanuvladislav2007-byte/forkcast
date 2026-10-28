@@ -279,12 +279,35 @@ function fromUSDA(f) {
 function usdaKey() {
   return encodeURIComponent(S.settings.usdaKey || "DEMO_KEY");
 }
+// USDA's server randomly refuses identical requests (a quick "400 Bad Request", or a dropped connection)
+// and then answers the next one fine, so retry a few times before giving up. The last try leaves out the
+// dataType filter, which USDA then defaults to all food types anyway.
+// Rate limits (429) and bad keys (403) aren't random, so those stop right away with a clear message.
+async function fetchUSDA(urls) {
+  let last = "";
+  for (let i = 0; i < urls.length; i++) {
+    if (i) await new Promise((res) => setTimeout(res, 300 * i));
+    try {
+      const r = await fetch(urls[i]);
+      if (r.ok) return await r.json();
+      if (r.status === 429) {
+        throw Object.assign(new Error(S.settings.usdaKey && S.settings.usdaKey !== "DEMO_KEY"
+          ? "USDA's hourly search limit is used up. Try again in a little while."
+          : "The shared DEMO_KEY hit USDA's hourly limit. Add your free personal key in Settings."), { final: true });
+      }
+      if (r.status === 403) throw Object.assign(new Error("USDA didn't accept your API key. Check it in Settings."), { final: true });
+      last = `USDA search failed (${r.status})`;
+    } catch (e) {
+      if (e.final) throw e;
+      last = "Couldn't reach USDA. Check your internet connection.";
+    }
+  }
+  throw new Error(last + " Try again in a moment.");
+}
 async function searchUSDA(q) {
-  const types = encodeURIComponent("Foundation,SR Legacy,Survey (FNDDS),Branded");
-  const r = await fetch(`${FDC}/foods/search?api_key=${usdaKey()}&query=${encodeURIComponent(q)}&pageSize=30&dataType=${types}`);
-  if (r.status === 429) throw new Error("USDA rate limit reached (DEMO_KEY). Add a free key in Settings.");
-  if (!r.ok) throw new Error("USDA search failed (" + r.status + ")");
-  const j = await r.json();
+  const base = `${FDC}/foods/search?api_key=${usdaKey()}&query=${encodeURIComponent(q)}&pageSize=30`;
+  const typed = base + "&dataType=" + encodeURIComponent("Foundation,SR Legacy,Survey (FNDDS),Branded");
+  const j = await fetchUSDA([typed, typed, base]);
   return (j.foods || []).map(fromUSDA).filter((f) => f.per100.kcal || f.per100.protein || f.per100.carbs || f.per100.fat);
 }
 
@@ -356,13 +379,10 @@ async function lookupBarcode(raw) {
     }
   } catch {}
   try {
-    const r = await fetch(`${FDC}/foods/search?api_key=${usdaKey()}&query=${code}&dataType=Branded&pageSize=10`);
-    if (r.ok) {
-      const j = await r.json();
-      const strip = (s) => String(s || "").replace(/^0+/, "");
-      const hit = (j.foods || []).find((f) => strip(f.gtinUpc) === strip(code));
-      if (hit) return fromUSDA(hit);
-    }
+    const url = `${FDC}/foods/search?api_key=${usdaKey()}&query=${code}&dataType=Branded&pageSize=10`;
+    const j = await fetchUSDA([url, url, url]);
+    const hit = (j.foods || []).find((f) => strip(f.gtinUpc) === strip(code));
+    if (hit) return fromUSDA(hit);
   } catch {}
   return null;
 }
