@@ -33,6 +33,7 @@ const DEFAULTS = {
   customFoods: [], // foods typed in from a label; ones with a barcode are found by scanning it
   collapsed: {}, // meal sections folded shut on the diary, e.g. { Lunch: true }
   combineClaude: false, // last choice for "log a pasted Claude meal as one entry"
+  lastAmounts: {}, // food id -> { unit: serving label or "g", amount, grams }: prefilled next time the food is opened
 };
 // Combined entries (a pasted Claude meal logged as one, or a premade meal) keep their parts in food.parts;
 // these are the ones currently unfolded on the diary.
@@ -644,6 +645,12 @@ function openFood(food, { grams, meal, entryId } = {}) {
     $("#unit").value = "g";
     $("#amount").value = "";
     setTimeout(() => $("#amount").focus(), 60);
+  } else if (S.lastAmounts[food.id]) {
+    // Same amount and unit as last time; a serving that no longer exists falls back to grams.
+    const last = S.lastAmounts[food.id];
+    const si = last.unit === "g" ? -1 : (food.servings || []).findIndex((s) => s.label === last.unit);
+    $("#unit").value = si >= 0 ? String(si) : "g";
+    $("#amount").value = si >= 0 ? last.amount : r1(last.grams);
   } else if (s0) {
     $("#unit").value = "0";
     $("#amount").value = 1;
@@ -728,9 +735,17 @@ function addEntry(food, grams, meal) {
   (S.log[day] ||= []).push({ id: uid(), meal, food, grams, at: Date.now() });
   remember(food);
 }
+// Remember how much of a food was used, so opening it again starts there instead of at a serving or 100 g.
+// AI estimates get a fresh id each time and batches/cooked foods are weighed on the plate, so those are skipped.
+function rememberAmount(food, grams) {
+  if (["AI estimate", "Batch", "Cooked"].includes(food.source)) return;
+  const u = $("#unit").value;
+  S.lastAmounts[food.id] = { unit: u === "g" ? "g" : food.servings[+u].label, amount: parseFloat($("#amount").value) || 0, grams };
+}
 $("#logFood").addEventListener("click", () => {
   const g = detailGrams();
   if (!(g > 0)) return toast("Enter an amount above zero.");
+  rememberAmount(detail.food, g);
   if (pickMode) {
     draft.items.push({ food: detail.food, grams: g });
     remember(detail.food);
